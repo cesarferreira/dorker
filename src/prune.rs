@@ -185,7 +185,8 @@ pub fn run(a: PruneArgs) -> Result<i32> {
             .into_iter()
             .map(|inst| InstanceRow {
                 inst,
-                bytes: dir_usage(&store.instance_dir(&inst.id)).1,
+                // What deleting the instance frees (instances are clones of their image).
+                bytes: images::dir_private_usage(&store.instance_dir(&inst.id)),
             })
             .collect()
     } else {

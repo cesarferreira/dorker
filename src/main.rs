@@ -6,6 +6,7 @@ mod dorkerfile;
 mod errors;
 mod images;
 mod log;
+mod ls;
 mod mcp;
 mod prune;
 mod runtime;
@@ -73,6 +74,12 @@ enum Command {
     },
     /// Remove an image
     Rmi { image: String },
+    /// Show images, instances and the disk space they use
+    #[command(alias = "df")]
+    Ls {
+        #[arg(long)]
+        json: bool,
+    },
     /// Free disk: remove unused images (and optionally stopped instances)
     Prune {
         /// Also remove tagged images that no instance uses (default: untagged ones only)
@@ -386,6 +393,7 @@ fn run(cli: Cli) -> Result<i32> {
         }),
         Command::Images { json } => commands::images(json),
         Command::Rmi { image } => commands::rmi(&image),
+        Command::Ls { json } => ls::run(json),
         Command::Prune {
             all,
             instances,

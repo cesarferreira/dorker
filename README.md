@@ -179,16 +179,29 @@ Measured on an Apple M4 Pro, API 35, 2GB: cold boot about 15s, snapshot restore
 about 4s. Host memory is about 2.5GB after a cold boot and 3.3GB after a restore.
 Details and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 
+### See what is using disk
+
+```bash
+dorker ls                          # images, instances and storage (alias: df)
+dorker ls --json
+```
+
+It lists every image (tags, Android version, size, last used, how many instances use it),
+every instance (with its own size) and a storage summary: totals, how much `dorker prune`
+could reclaim, free space on the disk and the Android SDK system images dorker does not
+manage. On macOS (APFS) an instance shares disk blocks with its image, so its size is only
+what it wrote itself; elsewhere instances are full copies and are counted in full.
+
 ### Free disk space
 
 Every Dorkerfile change makes a new image of about 3-5 GB. `dorker prune` removes the ones
-you no longer need:
+you no longer need (`dorker ls` shows what that would be):
 
 ```bash
 dorker prune --dry-run             # show what would be removed
 dorker prune                       # remove it, after asking
 dorker prune --all --instances     # also tagged images and stopped instances
-dorker prune --older-than 7d -y    # only things untouched for a week, no prompt
+dorker prune --older-than 7d -y    # only things idle for a week, no prompt
 ```
 
 By default it removes only images with no tag that no instance was made from; tagged
@@ -237,7 +250,7 @@ claude mcp add dorker -- dorker mcp
 
 See [docs/mcp.md](docs/mcp.md) for the tools, other clients and security notes. The same
 operations are available to scripts as `--json` on `run`, `start`, `exec`, `install`,
-`screenshot`, `test`, `ps`, `images`, `doctor` and `bench`.
+`screenshot`, `test`, `ps`, `images`, `doctor`, `bench`, `versions`, `prune` and `ls`.
 
 ### Diagnostics
 

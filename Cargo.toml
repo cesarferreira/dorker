@@ -28,3 +28,6 @@ lto = "thin"
 codegen-units = 1
 strip = true
 panic = "abort"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.191"

@@ -426,6 +426,35 @@ fn versions_without_an_sdk_is_a_missing_dependency() {
 }
 
 #[test]
+fn ls_on_an_empty_store_explains_how_to_get_started() {
+    let e = Env::new("ls-empty");
+    let o = e
+        .cmd(&["ls"])
+        .env("ANDROID_HOME", "/nonexistent")
+        .env("ANDROID_SDK_ROOT", "/nonexistent")
+        .env("HOME", "/nonexistent")
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    assert!(
+        out.contains("IMAGES") && out.contains("(none yet:"),
+        "{out}"
+    );
+    assert!(
+        out.contains("INSTANCES\n  (none)") && out.contains("STORAGE"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("Android SDK system images"),
+        "no SDK, so that line is omitted: {out}"
+    );
+    let v: serde_json::Value = serde_json::from_slice(&e.run(&["ls", "--json"]).stdout).unwrap();
+    assert_eq!(v["images"], serde_json::json!([]));
+    assert_eq!(v["storage"]["images_bytes"], 0);
+}
+
+#[test]
 fn prune_on_an_empty_store_is_a_no_op_and_json_needs_an_explicit_choice() {
     let e = Env::new("prune-empty");
     let o = e.run(&["prune"]);

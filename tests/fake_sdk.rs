@@ -1530,3 +1530,85 @@ fn prune_older_than_instances_json_and_incomplete_builds() {
         "the default prune also removed the unused image; the one an instance came from stays"
     );
 }
+
+#[test]
+fn ls_shows_images_instances_and_storage() {
+    let _guard = serial();
+    let f = Fake::new("ls", true);
+    let tagged = build_image(&f, "a", "MEMORY 2GB\n", Some("app:latest"));
+    let unused = build_image(&f, "b", "MEMORY 3GB\n", None);
+    assert_eq!(code(&f.run(&["run", "-d", "--name", "web", &tagged])), 0);
+    assert_eq!(code(&f.run(&["run", "-d", "--name", "web2", &tagged])), 0);
+
+    let out = f.run(&["ls"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let table = text(&out.stdout);
+    assert!(table.starts_with("IMAGES\n"), "{table}");
+    let tagged_row = table.lines().find(|l| l.starts_with(&tagged)).unwrap();
+    assert!(
+        tagged_row.contains("app:latest") && tagged_row.contains("2 instances"),
+        "{tagged_row}"
+    );
+    let unused_row = table.lines().find(|l| l.starts_with(&unused)).unwrap();
+    assert!(
+        unused_row.contains("<none>") && unused_row.trim_end().ends_with('-'),
+        "{unused_row}"
+    );
+    assert!(
+        table.contains("INSTANCES") && table.contains("web2") && table.contains("READY"),
+        "{table}"
+    );
+    assert!(
+        table.contains("STORAGE")
+            && table.contains("1 unused")
+            && table.contains("reclaimable with `dorker prune`"),
+        "{table}"
+    );
+    assert!(
+        table.contains("Android SDK system images (not managed by dorker): 1,"),
+        "{table}"
+    );
+
+    // JSON: usage per image, storage totals, and the same reclaimable count prune would act on.
+    let v: serde_json::Value =
+        serde_json::from_slice(&f.run(&["ls", "--json"]).stdout).expect("stdout is only JSON");
+    let img = v["images"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == tagged.as_str())
+        .unwrap();
+    assert_eq!(img["used_by_instances"], 2);
+    assert_eq!(v["instances"].as_array().unwrap().len(), 2);
+    assert_eq!(v["storage"]["reclaimable_images"], 1);
+    let prune: serde_json::Value =
+        serde_json::from_slice(&f.run(&["prune", "--json", "--dry-run"]).stdout).unwrap();
+    assert_eq!(
+        v["storage"]["reclaimable_bytes"], prune["reclaimable_bytes"],
+        "ls and prune agree on what is reclaimable"
+    );
+
+    // `df` is an alias, and a stopped instance is reported as such.
+    assert_eq!(code(&f.run(&["stop", "web2"])), 0);
+    let out = f.run(&["df"]);
+    assert!(
+        text(&out.stdout)
+            .lines()
+            .any(|l| l.starts_with("web2-") || (l.contains("web2") && l.contains("STOPPED"))),
+        "{}",
+        text(&out.stdout)
+    );
+    // A killed emulator is shown as CRASHED, not READY (same reconciliation as `ps`).
+    let pid = f.live_emulators()[0];
+    let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+    wait_until("the killed emulator to be gone", || {
+        f.live_emulators().is_empty()
+    });
+    assert!(
+        text(&f.run(&["ls"]).stdout)
+            .lines()
+            .any(|l| l.contains("web ") && l.contains("CRASHED")),
+        "{}",
+        text(&f.run(&["ls"]).stdout)
+    );
+}

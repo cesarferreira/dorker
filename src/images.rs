@@ -175,6 +175,71 @@ pub fn dir_usage(path: &Path) -> (u64, u64) {
     (logical, allocated)
 }
 
+/// Bytes that exist only in this file: what deleting it would free. On APFS a clone shares its
+/// blocks with the file it was cloned from, so a fresh instance of a 3.5 GB image has a private
+/// size of ~0 until it writes something. `None` where the platform cannot tell.
+#[cfg(target_os = "macos")]
+fn private_size(path: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    // From <sys/attr.h>: extended common attributes live in `forkattr` when this option is set.
+    const FSOPT_NOFOLLOW: u32 = 0x1;
+    const FSOPT_ATTR_CMN_EXTENDED: u32 = 0x20;
+    const ATTR_CMNEXT_PRIVATESIZE: u32 = 0x8;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `attrlist` is plain data, zero is a valid initial state, and `buf` is large enough
+    // for the length word plus one off_t that the kernel writes back.
+    let mut al: libc::attrlist = unsafe { std::mem::zeroed() };
+    al.bitmapcount = libc::ATTR_BIT_MAP_COUNT;
+    al.forkattr = ATTR_CMNEXT_PRIVATESIZE;
+    let mut buf = [0u8; 16];
+    let rc = unsafe {
+        libc::getattrlist(
+            c.as_ptr(),
+            (&mut al as *mut libc::attrlist).cast(),
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            FSOPT_NOFOLLOW | FSOPT_ATTR_CMN_EXTENDED,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    let len = u32::from_ne_bytes(buf[0..4].try_into().ok()?);
+    (len >= 12).then(|| i64::from_ne_bytes(buf[4..12].try_into().unwrap_or([0; 8])).max(0) as u64)
+}
+
+/// Disk space only this directory uses: the sum of its files' private sizes where the filesystem
+/// can say (macOS/APFS, clone-aware), else the allocated size, which is right wherever copies are
+/// full copies. This is the honest "cost" of an instance cloned from an image.
+pub fn dir_private_usage(path: &Path) -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        let mut total = 0;
+        let mut stack = vec![path.to_path_buf()];
+        while let Some(p) = stack.pop() {
+            let Ok(rd) = fs::read_dir(&p) else { continue };
+            for e in rd.flatten() {
+                let Ok(md) = e.path().symlink_metadata() else {
+                    continue;
+                };
+                if md.is_dir() {
+                    stack.push(e.path());
+                } else {
+                    total += private_size(&e.path()).unwrap_or(md.blocks() * 512);
+                }
+            }
+        }
+        total
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        dir_usage(path).1
+    }
+}
+
+/// True where `dir_private_usage` understands cloned files (so sizes are exact, not upper bounds).
+pub const CLONE_AWARE_SIZES: bool = cfg!(target_os = "macos");
+
 pub fn human(bytes: u64) -> String {
     const G: f64 = 1024.0 * 1024.0 * 1024.0;
     const M: f64 = 1024.0 * 1024.0;
@@ -260,6 +325,84 @@ mod tests {
         evil.id = "../instances".into();
         assert!(remove(&store, &evil).is_err());
         assert!(d.path().join("instances").is_dir());
+    }
+
+    #[test]
+    fn private_usage_of_a_plain_directory_matches_its_files() {
+        let d = Dir::new();
+        fs::write(d.path().join("a"), vec![7u8; 300_000]).unwrap();
+        fs::create_dir_all(d.path().join("sub")).unwrap();
+        fs::write(d.path().join("sub/b"), vec![9u8; 200_000]).unwrap();
+        let private = dir_private_usage(d.path());
+        assert!(private >= 500_000, "{private}");
+        // Nothing is shared, so it is about the allocated size. (Not exactly: a file
+        // written a moment ago may not have its final allocation yet.)
+        let allocated = dir_usage(d.path()).1;
+        assert!(
+            private.abs_diff(allocated) < 200_000,
+            "{private} vs {allocated}"
+        );
+        assert_eq!(dir_private_usage(&d.path().join("missing")), 0);
+    }
+
+    /// On APFS a clone shares its blocks with the source, so an instance cloned from an image
+    /// costs almost nothing until it writes. Skips itself where `cp -c` is not supported.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn private_usage_sees_through_apfs_clones() {
+        use std::io::{Seek, SeekFrom, Write};
+        let d = Dir::new();
+        let src = d.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("big"),
+            (0..8_000_000u32)
+                .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8)
+                .collect::<Vec<u8>>(),
+        )
+        .unwrap();
+        let clone = d.path().join("clone");
+        let ok = std::process::Command::new("cp")
+            .args(["-c", "-R"])
+            .arg(&src)
+            .arg(&clone)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        let shared = dir_private_usage(&clone) < 1_000_000;
+        if !ok || !shared {
+            eprintln!("skipped: this temp directory does not support clones");
+            return;
+        }
+        assert!(
+            dir_usage(&clone).1 >= 8_000_000,
+            "the apparent size is the full 8 MB"
+        );
+        // The instance writes 2 MB: only that is its own data now.
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .open(clone.join("big"))
+            .unwrap();
+        f.seek(SeekFrom::Start(0)).unwrap();
+        f.write_all(&vec![0xABu8; 2_000_000]).unwrap();
+        f.sync_all().unwrap();
+        let own = dir_private_usage(&clone);
+        assert!(
+            (1_500_000..4_500_000).contains(&own),
+            "own data is about the 2 MB written, got {own}"
+        );
+        // A plain copy has no shared blocks, so all of it is its own.
+        let copy = d.path().join("copy");
+        assert!(
+            std::process::Command::new("cp")
+                .args(["-R"])
+                .arg(&src)
+                .arg(&copy)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(dir_private_usage(&copy) >= 8_000_000);
     }
 
     #[test]
