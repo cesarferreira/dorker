@@ -14,6 +14,8 @@ pub struct BenchArgs {
     pub apk: Option<PathBuf>,
     pub json: bool,
     pub timeout: u64,
+    pub gpu: Option<String>,
+    pub skip_idle: bool,
 }
 
 fn sh(cmd: &str, args: &[&str]) -> Option<String> {
@@ -75,20 +77,17 @@ fn proc_cpu_ticks(pid: u32) -> Option<u64> {
     Some(f.get(11)?.parse::<u64>().ok()? + f.get(12)?.parse::<u64>().ok()?)
 }
 
-/// Idle CPU% (interval average) and RSS (MB) of a process.
-fn idle_usage(pid: u32) -> (Option<f64>, Option<f64>) {
-    let rss = sh("ps", &["-o", "rss=", "-p", &pid.to_string()])
-        .and_then(|s| s.trim().parse::<f64>().ok())
-        .map(|kb| kb / 1024.0);
-    let cpu = if cfg!(target_os = "macos") {
-        // Two samples, 3 s apart; the second is the interval average.
+/// CPU% of one core used by a process over `secs` (interval average).
+fn cpu_percent(pid: u32, secs: u64) -> Option<f64> {
+    if cfg!(target_os = "macos") {
+        // Two samples `secs` apart; the second is the interval average.
         sh(
             "top",
             &[
                 "-l",
                 "2",
                 "-s",
-                "3",
+                &secs.to_string(),
                 "-pid",
                 &pid.to_string(),
                 "-stats",
@@ -102,15 +101,103 @@ fn idle_usage(pid: u32) -> (Option<f64>, Option<f64>) {
         let ticks = sh("getconf", &["CLK_TCK"])
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(100.0);
-        let a = proc_cpu_ticks(pid);
-        std::thread::sleep(Duration::from_secs(3));
-        let b = proc_cpu_ticks(pid);
-        match (a, b) {
-            (Some(a), Some(b)) => Some((b.saturating_sub(a)) as f64 / ticks / 3.0 * 100.0),
-            _ => None,
+        let a = proc_cpu_ticks(pid)?;
+        std::thread::sleep(Duration::from_secs(secs));
+        let b = proc_cpu_ticks(pid)?;
+        Some(b.saturating_sub(a) as f64 / ticks / secs as f64 * 100.0)
+    }
+}
+
+/// Below this (% of one core over 5 s) the guest counts as idle.
+const QUIET_PERCENT: f64 = 25.0;
+const QUIET_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Host memory attributable to the emulator process, in MB, and the metric used.
+/// macOS `ps` RSS excludes compressed pages and swings by 2-3x for the same
+/// workload, so use `footprint` (physical footprint). Linux uses VmRSS.
+pub fn memory_mb(pid: u32) -> (Option<f64>, &'static str) {
+    if cfg!(target_os = "macos") {
+        let mb = sh("footprint", &["-p", &pid.to_string()]).and_then(|o| parse_footprint_mb(&o));
+        if mb.is_some() {
+            return (mb, "footprint");
         }
-    };
-    (cpu, rss)
+    }
+    let kb = std::fs::read_to_string(format!("/proc/{pid}/status"))
+        .ok()
+        .and_then(|t| {
+            t.lines().find_map(|l| {
+                l.strip_prefix("VmRSS:")
+                    .map(|v| v.trim().trim_end_matches("kB").trim().to_string())
+            })
+        })
+        .and_then(|v| v.parse::<f64>().ok())
+        .or_else(|| {
+            sh("ps", &["-o", "rss=", "-p", &pid.to_string()]).and_then(|s| s.trim().parse().ok())
+        });
+    (kb.map(|k| k / 1024.0), "rss")
+}
+
+/// Parse `Footprint: 2737 MB` from `footprint -p` output.
+pub fn parse_footprint_mb(out: &str) -> Option<f64> {
+    let rest = out.lines().find_map(|l| l.split("Footprint:").nth(1))?;
+    let mut it = rest.split_whitespace();
+    let n: f64 = it.next()?.parse().ok()?;
+    match it.next()? {
+        "KB" => Some(n / 1024.0),
+        "MB" => Some(n),
+        "GB" => Some(n * 1024.0),
+        _ => None,
+    }
+}
+
+pub struct Idle {
+    pub cpu: Option<f64>,
+    pub mem_mb: Option<f64>,
+    pub mem_metric: &'static str,
+    /// Seconds spent waiting for the guest to go quiet before measuring.
+    pub settled_after_secs: f64,
+    pub quiet: bool,
+}
+
+/// Wait for the emulator to go quiet (first boot and post-restore background work
+/// can use whole cores for a minute), then measure CPU over 10 s and RSS. A fixed
+/// short settle time reported that background work as "idle CPU", which it is not.
+fn idle_usage(pid: u32) -> Idle {
+    let t0 = Instant::now();
+    let mut quiet = false;
+    while t0.elapsed() < QUIET_TIMEOUT {
+        match cpu_percent(pid, 5) {
+            Some(c) if c < QUIET_PERCENT => {
+                quiet = true;
+                break;
+            }
+            Some(_) => {}
+            None => break,
+        }
+    }
+    let settled_after_secs = t0.elapsed().as_secs_f64();
+    let cpu = cpu_percent(pid, 10);
+    let (mem_mb, mem_metric) = memory_mb(pid);
+    Idle {
+        cpu,
+        mem_mb,
+        mem_metric,
+        settled_after_secs,
+        quiet,
+    }
+}
+
+fn idle_json(i: &Option<Idle>) -> serde_json::Value {
+    match i {
+        None => serde_json::Value::Null,
+        Some(i) => json!({
+            "cpu_percent": i.cpu.map(|c| (c * 10.0).round() / 10.0),
+            "host_memory_mb": i.mem_mb.map(|m| m.round()),
+            "memory_metric": i.mem_metric,
+            "settled_after_secs": (i.settled_after_secs * 10.0).round() / 10.0,
+            "reached_quiet": i.quiet,
+        }),
+    }
 }
 
 pub fn run(a: BenchArgs) -> Result<i32> {
@@ -123,6 +210,7 @@ pub fn run(a: BenchArgs) -> Result<i32> {
         cpus: None,
         adb_port: None,
         timeout: a.timeout,
+        gpu: a.gpu.clone(),
     };
     let mut cold = Vec::new();
     let mut restore = Vec::new();
@@ -136,14 +224,22 @@ pub fn run(a: BenchArgs) -> Result<i32> {
         Ok(t.elapsed().as_secs_f64())
     };
 
+    // Idle usage is measured on the last cold-booted and the last restored instance,
+    // because a restored guest holds its whole RAM image and behaves differently.
+    let (mut idle_cold, mut idle_restore): (Option<Idle>, Option<Idle>) = (None, None);
     for i in 0..a.runs {
         let mut s = start(&base(format!("bench-cold-{i}")), true)?;
         cold.push(s.ready_secs);
+        if i + 1 == a.runs && !a.skip_idle {
+            if let Some(pid) = s.inst.pid {
+                idle_cold = Some(idle_usage(pid));
+            }
+        }
         cleanup.push(tear_down(&mut s)?);
     }
 
     // The last measured run stays up for install / screenshot / idle numbers.
-    let (mut install, mut shot, mut idle_cpu, mut idle_rss) = (None, None, None, None);
+    let (mut install, mut shot) = (None, None);
     for i in 0..a.runs {
         let mut s = start(&base(format!("bench-run-{i}")), false)?;
         if s.restored {
@@ -170,9 +266,8 @@ pub fn run(a: BenchArgs) -> Result<i32> {
             if png.status.success() && png.stdout.len() > 8 {
                 shot = Some(t.elapsed().as_secs_f64());
             }
-            std::thread::sleep(Duration::from_secs(10)); // let the guest settle
-            if let Some(pid) = s.inst.pid {
-                (idle_cpu, idle_rss) = idle_usage(pid);
+            if let Some(pid) = s.inst.pid.filter(|_| !a.skip_idle) {
+                idle_restore = Some(idle_usage(pid));
             }
         }
         cleanup.push(tear_down(&mut s)?);
@@ -195,8 +290,8 @@ pub fn run(a: BenchArgs) -> Result<i32> {
         "snapshot_restore_secs": { "samples": restore, "median": median(&restore).map(r2), "available": !snapshot_unavailable && !restore.is_empty() },
         "apk_install_secs": install.map(r2),
         "screenshot_secs": shot.map(r2),
-        "idle_cpu_percent": idle_cpu,
-        "idle_host_rss_mb": idle_rss.map(|m| m.round()),
+        "idle_cold_boot": idle_json(&idle_cold),
+        "idle_after_restore": idle_json(&idle_restore),
         "cleanup_secs": { "median": median(&cleanup).map(r2) },
     });
     if a.json {
@@ -230,8 +325,26 @@ pub fn run(a: BenchArgs) -> Result<i32> {
         }
         println!("  apk install        {}", f(install, "s"));
         println!("  screenshot         {}", f(shot, "s"));
-        println!("  idle cpu           {}", f(idle_cpu, "%"));
-        println!("  idle host rss      {}", f(idle_rss, " MB"));
+        for (label, idle) in [
+            ("idle, cold boot", &idle_cold),
+            ("idle, after restore", &idle_restore),
+        ] {
+            let Some(i) = idle else { continue };
+            let note = if i.quiet {
+                format!("quiet after {:.0}s", i.settled_after_secs)
+            } else {
+                format!(
+                    "NOT quiet after {:.0}s; includes background work",
+                    i.settled_after_secs
+                )
+            };
+            println!(
+                "  {label:<20} cpu {}  mem {} ({})  [{note}]",
+                f(i.cpu, "%"),
+                f(i.mem_mb.map(f64::round), " MB"),
+                i.mem_metric
+            );
+        }
         println!("  stop + remove      {} (median)", f(median(&cleanup), "s"));
     }
     Ok(0)
@@ -255,6 +368,21 @@ mod tests {
             f[11].parse::<u64>().unwrap() + f[12].parse::<u64>().unwrap(),
             42
         );
+    }
+
+    #[test]
+    fn footprint_parsing() {
+        let out = "qemu-system-aarch64-headless [66205]: 64-bit    Footprint: 2737 MB (16384 bytes per page)\n";
+        assert_eq!(parse_footprint_mb(out), Some(2737.0));
+        assert_eq!(
+            parse_footprint_mb("x Footprint: 512 KB (4096 bytes per page)"),
+            Some(0.5)
+        );
+        assert_eq!(
+            parse_footprint_mb("x Footprint: 2 GB (4096 bytes per page)"),
+            Some(2048.0)
+        );
+        assert_eq!(parse_footprint_mb("no such line"), None);
     }
 
     #[test]

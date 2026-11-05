@@ -85,6 +85,8 @@ pub struct Instance {
     pub width: u32,
     #[serde(default = "default_height")]
     pub height: u32,
+    #[serde(default = "default_gpu")]
+    pub gpu: String,
     /// Image this instance was cloned from (`None` for base `android:<api>` runs).
     #[serde(default)]
     pub image_id: Option<String>,
@@ -93,6 +95,9 @@ pub struct Instance {
     pub snapshot: Option<String>,
 }
 
+fn default_gpu() -> String {
+    "swiftshader_indirect".into()
+}
 fn default_device() -> String {
     "pixel_7".into()
 }
@@ -369,6 +374,7 @@ mod tests {
             device: "pixel_7".into(),
             width: 1080,
             height: 2400,
+            gpu: "swiftshader_indirect".into(),
             image_id: None,
             snapshot: None,
         }

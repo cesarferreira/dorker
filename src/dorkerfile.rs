@@ -3,7 +3,7 @@
 use crate::units::{ImageRef, parse_size_mb};
 use std::fmt;
 
-const DIRECTIVES: [&str; 11] = [
+const DIRECTIVES: [&str; 12] = [
     "FROM",
     "MEMORY",
     "CPUS",
@@ -11,10 +11,22 @@ const DIRECTIVES: [&str; 11] = [
     "DEVICE",
     "RESOLUTION",
     "HEADLESS",
+    "GPU",
     "INSTALL",
     "SETTING",
     "SNAPSHOT",
     "CMD",
+];
+
+/// Emulator `-gpu` modes dorker accepts. `host` needs a GPU/display (fails on headless
+/// Linux VMs); `swiftshader_indirect` works everywhere and is the headless default.
+pub const GPU_MODES: [&str; 6] = [
+    "auto",
+    "swiftshader_indirect",
+    "angle_indirect",
+    "guest",
+    "host",
+    "off",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,11 +51,30 @@ pub struct Dorkerfile {
     pub device: String,
     pub resolution: (u32, u32),
     pub headless: bool,
+    /// Emulator GPU mode; `None` means the default for the headless setting.
+    pub gpu: Option<String>,
     /// APK paths exactly as written (relative to the build context).
     pub installs: Vec<String>,
     pub settings: Vec<Setting>,
     pub snapshot: Option<String>,
     pub cmd: Option<Cmd>,
+}
+
+impl Dorkerfile {
+    /// The GPU mode to use: the explicit directive, else a safe default.
+    pub fn gpu_mode(&self) -> String {
+        self.gpu
+            .clone()
+            .unwrap_or_else(|| default_gpu(self.headless).to_string())
+    }
+}
+
+pub fn default_gpu(headless: bool) -> &'static str {
+    if headless {
+        "swiftshader_indirect"
+    } else {
+        "auto"
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +213,7 @@ pub fn parse(file: &str, source: &str) -> Result<Dorkerfile, ParseError> {
         device: "pixel_7".into(),
         resolution: (1080, 2400),
         headless: true,
+        gpu: None,
         installs: vec![],
         settings: vec![],
         snapshot: None,
@@ -329,6 +361,21 @@ pub fn parse(file: &str, source: &str) -> Result<Dorkerfile, ParseError> {
                     _ => return Err(bad(&args[0], "HEADLESS must be true or false".into())),
                 };
             }
+            "GPU" => {
+                need(1)?;
+                let m = args[0].text.to_ascii_lowercase();
+                if !GPU_MODES.contains(&m.as_str()) {
+                    return Err(bad(
+                        &args[0],
+                        format!(
+                            "unsupported GPU mode {:?}: use one of {}",
+                            args[0].text,
+                            GPU_MODES.join(", ")
+                        ),
+                    ));
+                }
+                d.gpu = Some(m);
+            }
             "INSTALL" => {
                 need(1)?;
                 d.installs.push(args[0].text.clone());
@@ -435,6 +482,28 @@ mod tests {
         assert_eq!(d.settings[1].namespace, "secure");
         assert_eq!(d.snapshot.as_deref(), Some("ready"));
         assert_eq!(d.cmd, Some(Cmd::Launch("com.example.application".into())));
+    }
+
+    #[test]
+    fn gpu_directive() {
+        let d = p("FROM android:35\nGPU host\n").unwrap();
+        assert_eq!(d.gpu_mode(), "host");
+        assert_eq!(
+            p("FROM android:35\n").unwrap().gpu_mode(),
+            "swiftshader_indirect"
+        );
+        assert_eq!(
+            p("FROM android:35\nHEADLESS false\n").unwrap().gpu_mode(),
+            "auto"
+        );
+        assert_eq!(
+            p("FROM android:35\nGPU ANGLE_indirect\n")
+                .unwrap()
+                .gpu_mode(),
+            "angle_indirect"
+        );
+        assert!(p("FROM android:35\nGPU turbo\n").is_err());
+        assert!(p("FROM android:35\nGPU host\nGPU guest\n").is_err());
     }
 
     #[test]

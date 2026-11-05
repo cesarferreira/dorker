@@ -90,6 +90,12 @@ enum Command {
         json: bool,
         #[arg(long, default_value_t = 300)]
         timeout: u64,
+        /// GPU mode for base `android:<api>` images
+        #[arg(long)]
+        gpu: Option<String>,
+        /// Skip the (slow) idle CPU and memory measurement
+        #[arg(long)]
+        skip_idle: bool,
     },
     /// Launch an instance from an image (e.g. android:35)
     Run {
@@ -115,6 +121,10 @@ enum Command {
         /// Seconds to wait for Android to boot
         #[arg(long, default_value_t = 300)]
         timeout: u64,
+        /// Emulator GPU mode for base images: swiftshader_indirect (default), host,
+        /// angle_indirect, guest, off, auto. Built images fix this in their Dorkerfile.
+        #[arg(long)]
+        gpu: Option<String>,
     },
     /// List instances
     Ps {
@@ -201,6 +211,7 @@ fn run(cli: Cli) -> Result<i32> {
             cpus,
             adb_port,
             timeout,
+            gpu,
         } => commands::run(commands::RunArgs {
             image,
             name,
@@ -210,6 +221,7 @@ fn run(cli: Cli) -> Result<i32> {
             cpus,
             adb_port,
             timeout,
+            gpu,
         }),
         Command::Build {
             context,
@@ -238,12 +250,16 @@ fn run(cli: Cli) -> Result<i32> {
             apk,
             json,
             timeout,
+            gpu,
+            skip_idle,
         } => bench::run(bench::BenchArgs {
             image,
             runs: runs.max(1),
             apk,
             json,
             timeout,
+            gpu,
+            skip_idle,
         }),
         Command::Images { json } => commands::images(json),
         Command::Rmi { image } => commands::rmi(&image),

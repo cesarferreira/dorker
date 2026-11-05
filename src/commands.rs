@@ -1,3 +1,4 @@
+use crate::dorkerfile::{GPU_MODES, default_gpu};
 use crate::errors;
 use crate::images::{self, ImageMeta};
 use crate::runtime::{self, BootMode};
@@ -17,6 +18,8 @@ pub struct RunArgs {
     pub cpus: Option<u32>,
     pub adb_port: Option<u16>,
     pub timeout: u64,
+    /// GPU mode for base `android:<api>` runs; built images use their own.
+    pub gpu: Option<String>,
 }
 
 fn host_cpus() -> u32 {
@@ -85,7 +88,7 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
     } else {
         Some(images::find(&store, &a.image).map_err(cfg)?)
     };
-    let (sys, mut memory_mb, mut cpus, disk_mb, headless, device, (width, height)) =
+    let (sys, mut memory_mb, mut cpus, disk_mb, headless, gpu, device, (width, height)) =
         match &image_meta {
             Some(m) => {
                 // Resolve by the exact package the image was built from, not by API
@@ -107,6 +110,7 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
                     m.cpus,
                     m.disk_mb,
                     m.headless,
+                    m.gpu.clone(),
                     m.device.clone(),
                     (m.width, m.height),
                 )
@@ -121,11 +125,27 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
                     2,
                     4096,
                     true,
+                    a.gpu
+                        .clone()
+                        .unwrap_or_else(|| default_gpu(true).to_string()),
                     "pixel_7".to_string(),
                     (1080, 2400),
                 )
             }
         };
+    if let Some(g) = &a.gpu {
+        if image_meta.is_some() {
+            return Err(cfg(anyhow::anyhow!(
+                "--gpu only applies to base android:<api> runs; a built image's GPU mode is fixed by its Dorkerfile (`GPU {g}`), because it is part of the snapshot"
+            )));
+        }
+        if !GPU_MODES.contains(&g.as_str()) {
+            return Err(cfg(anyhow::anyhow!(
+                "unsupported --gpu {g:?}: use one of {}",
+                GPU_MODES.join(", ")
+            )));
+        }
+    }
     let mut overridden = false;
     if let Some(m) = &a.memory {
         let mb = parse_size_mb(m).map_err(cfg)?;
@@ -221,6 +241,7 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
         device,
         width,
         height,
+        gpu,
         image_id: image_meta.as_ref().map(|m| m.id.clone()),
         snapshot,
     };

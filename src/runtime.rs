@@ -360,8 +360,9 @@ pub fn spawn_emulator(sdk: &Sdk, store: &Store, inst: &Instance, mode: &BootMode
             cmd.args(["-snapshot", name, "-no-snapshot-save"]);
         }
     }
+    cmd.args(["-gpu", &inst.gpu]);
     if inst.headless {
-        cmd.args(["-no-window", "-gpu", "swiftshader_indirect"]);
+        cmd.arg("-no-window");
     }
     cmd.env("ANDROID_AVD_HOME", dir.join("avd"))
         .env("ANDROID_SDK_ROOT", &sdk.root)
@@ -618,6 +619,7 @@ mod tests {
             device: "pixel_7".into(),
             width: 1080,
             height: 2400,
+            gpu: "swiftshader_indirect".into(),
             image_id: None,
             snapshot: None,
         }

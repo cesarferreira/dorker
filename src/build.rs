@@ -87,7 +87,7 @@ pub struct Inputs<'a> {
 /// only their content hashes count, so moving a project does not bust the cache.
 pub fn fingerprint(i: &Inputs) -> String {
     let d = i.df;
-    let mut s = String::from("dorker-build-v2\n");
+    let mut s = String::from("dorker-build-v3\n");
     let _ = writeln!(
         s,
         "system_image={}@{}",
@@ -102,8 +102,12 @@ pub fn fingerprint(i: &Inputs) -> String {
     );
     let _ = writeln!(
         s,
-        "device={} res={}x{} headless={}",
-        d.device, d.resolution.0, d.resolution.1, d.headless
+        "device={} res={}x{} headless={} gpu={}",
+        d.device,
+        d.resolution.0,
+        d.resolution.1,
+        d.headless,
+        d.gpu_mode()
     );
     for a in i.apks {
         let _ = writeln!(s, "apk={}", a.sha256);
@@ -142,8 +146,12 @@ fn render_lock(i: &Inputs, fp: &str) -> String {
     );
     let _ = writeln!(
         s,
-        "memory_mb = {}\ncpus = {}\ndisk_mb = {}\nheadless = {}",
-        d.memory_mb, d.cpus, d.disk_mb, d.headless
+        "memory_mb = {}\ncpus = {}\ndisk_mb = {}\nheadless = {}\ngpu = \"{}\"",
+        d.memory_mb,
+        d.cpus,
+        d.disk_mb,
+        d.headless,
+        d.gpu_mode()
     );
     if let Some(n) = &d.snapshot {
         let _ = writeln!(s, "snapshot = \"{n}\"");
@@ -271,6 +279,7 @@ pub fn build(a: BuildArgs) -> Result<i32> {
         width: df.resolution.0,
         height: df.resolution.1,
         headless: df.headless,
+        gpu: df.gpu_mode(),
         snapshot: df.snapshot.clone(),
         launch,
         created_at: now_secs(),
@@ -341,6 +350,7 @@ fn build_new(
         device: df.device.clone(),
         width: df.resolution.0,
         height: df.resolution.1,
+        gpu: df.gpu_mode(),
         image_id: None,
         snapshot: None,
     };
@@ -563,6 +573,13 @@ mod tests {
         );
         let df2 = dorkerfile::parse("D", "FROM android:35\nSETTING a 2\nSNAPSHOT ready\n").unwrap();
         assert_ne!(base, fingerprint(&inputs(&df2, &a, "9", "1.0")), "settings");
+        // The GPU mode is part of the snapshot's hardware identity, so it must bust the cache.
+        let gpu = dorkerfile::parse(
+            "D",
+            "FROM android:35\nSETTING a 1\nSNAPSHOT ready\nGPU host\n",
+        )
+        .unwrap();
+        assert_ne!(base, fingerprint(&inputs(&gpu, &a, "9", "1.0")), "gpu mode");
         let df3 = dorkerfile::parse(
             "D",
             "FROM android:35\nMEMORY 3GB\nSETTING a 1\nSNAPSHOT ready\n",

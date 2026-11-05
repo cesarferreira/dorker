@@ -31,10 +31,16 @@ pub struct ImageMeta {
     pub width: u32,
     pub height: u32,
     pub headless: bool,
+    #[serde(default = "default_gpu")]
+    pub gpu: String,
     pub snapshot: Option<String>,
     /// Package launched after startup (`CMD launch <package>`).
     pub launch: Option<String>,
     pub created_at: u64,
+}
+
+fn default_gpu() -> String {
+    "swiftshader_indirect".into()
 }
 
 pub fn image_dir(store: &Store, id: &str) -> PathBuf {
@@ -182,6 +188,7 @@ mod tests {
             width: 1080,
             height: 2400,
             headless: true,
+            gpu: "swiftshader_indirect".into(),
             snapshot: Some("ready".into()),
             launch: None,
             created_at: 1,
