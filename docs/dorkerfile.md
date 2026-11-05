@@ -27,7 +27,7 @@ CMD launch com.example.application
 
 | Directive | Arguments | Notes |
 |---|---|---|
-| `FROM` | `android:<api>[-<flavour>]` | Resolved against **installed** system images for the host ABI. Without a flavour, `google_apis` is preferred, then `default`, then others |
+| `FROM` | `android:<api>[-<flavour>]` | Resolved against **installed** system images for the host ABI; `dorker pull` (no arguments) installs the one named here. Without a flavour, `google_apis` is preferred, then `default`, then others |
 | `MEMORY` | `2GB`, `2048MB` | 1GB-32GB. Default 2GB |
 | `CPUS` | integer | 1-16, at most the host's cores. Default 2 |
 | `DISK` | `4GB` | Userdata partition size, 2GB-64GB. Default 4GB |

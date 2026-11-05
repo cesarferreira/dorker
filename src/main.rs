@@ -67,7 +67,13 @@ enum Command {
     /// Remove an image
     Rmi { image: String },
     /// Install a system image, e.g. `dorker pull android:35`
-    Pull { image: String },
+    Pull {
+        /// Image to install; omit to install the `FROM` image of ./Dorkerfile
+        image: Option<String>,
+        /// Dorkerfile to read when no image is given (default: ./Dorkerfile)
+        #[arg(short, long)]
+        file: Option<std::path::PathBuf>,
+    },
     /// Create a starter Dorkerfile in the current directory
     Init,
     /// Run a Model Context Protocol server on stdio, so AI agents can drive dorker
@@ -286,7 +292,7 @@ fn run(cli: Cli) -> Result<i32> {
             timeout,
             no_cache,
         }),
-        Command::Pull { image } => commands::pull(&image),
+        Command::Pull { image, file } => commands::pull(image.as_deref(), file.as_deref()),
         Command::Init => commands::init(),
         Command::Mcp => mcp::serve(),
         Command::Test {

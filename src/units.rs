@@ -25,6 +25,20 @@ pub struct ImageRef {
     pub flavour: Option<String>,
 }
 
+impl std::fmt::Display for ImageRef {
+    /// The `android:<api>[.minor][-flavour]` form that `ImageRef::parse` accepts.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "android:{}", self.api)?;
+        if let Some(m) = self.minor {
+            write!(f, ".{m}")?;
+        }
+        if let Some(fl) = &self.flavour {
+            write!(f, "-{fl}")?;
+        }
+        Ok(())
+    }
+}
+
 impl ImageRef {
     pub fn parse(input: &str) -> Result<Self> {
         let Some(tag) = input.strip_prefix("android:") else {
@@ -63,6 +77,18 @@ mod tests {
         assert_eq!(parse_size_mb("1024").unwrap(), 1024);
         assert!(parse_size_mb("abc").is_err());
         assert!(parse_size_mb("2TB").is_err());
+    }
+
+    #[test]
+    fn image_refs_round_trip_through_display() {
+        for s in [
+            "android:35",
+            "android:36.1",
+            "android:35-google_apis",
+            "android:36.1-google_apis_playstore",
+        ] {
+            assert_eq!(ImageRef::parse(s).unwrap().to_string(), s);
+        }
     }
 
     #[test]

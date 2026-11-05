@@ -89,7 +89,7 @@ base image, resources, the APK to install, settings, and a snapshot to start fro
 
 ```dockerfile
 # Dorkerfile
-FROM android:35                 # Android 35 system image (must be installed: dorker pull android:35)
+FROM android:35                 # Android 35 system image (install it with: dorker pull)
 
 MEMORY 2GB                      # guest RAM
 CPUS 2
@@ -111,6 +111,7 @@ CMD launch com.example.app      # open this app once an instance is ready
 Then build the image once and run it as many times as you like:
 
 ```bash
+dorker pull                                 # installs the Dorkerfile's FROM image if it is missing
 dorker build -t myapp:latest .              # reads ./Dorkerfile, writes Dorkerfile.lock
 dorker run -d --name t1 myapp:latest        # starts from the snapshot in a few seconds
 dorker screenshot t1 shot.png               # the app is already open

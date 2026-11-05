@@ -6,7 +6,7 @@ use crate::sdk::Sdk;
 use crate::store::{Instance, State, Store, new_id, now_secs};
 use crate::units::{ImageRef, parse_size_mb};
 use anyhow::{Context, Result, bail};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub struct RunArgs {
@@ -561,9 +561,35 @@ pub fn rmi(key: &str) -> Result<i32> {
 
 /// Install a system image with the SDK's own `sdkmanager` (it handles licences and
 /// downloads, and prompts on the terminal when a licence needs accepting).
-pub fn pull(image: &str) -> Result<i32> {
+/// The base image a Dorkerfile asks for (`FROM`), so `dorker pull` can install it.
+fn image_from_dorkerfile(file: Option<&Path>) -> Result<String> {
+    let cfg = errors::with(errors::CONFIG);
+    let path = file.map_or_else(|| PathBuf::from("Dorkerfile"), Path::to_path_buf);
+    let source = std::fs::read_to_string(&path).map_err(|e| {
+        cfg(anyhow::anyhow!(
+            "no image given and could not read {}: {e}\n\nName an image (`dorker pull android:35`) or run this from a folder with a Dorkerfile (or pass -f).",
+            path.display()
+        ))
+    })?;
+    let display = path.file_name().map_or_else(
+        || "Dorkerfile".to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let df = crate::dorkerfile::parse(&display, &source).map_err(|e| cfg(e.into()))?;
+    Ok(df.from.to_string())
+}
+
+pub fn pull(image: Option<&str>, file: Option<&Path>) -> Result<i32> {
     let dep = errors::with(errors::DEPENDENCY);
-    let r = ImageRef::parse(image).map_err(errors::with(errors::CONFIG))?;
+    let image = match image {
+        Some(i) => i.to_string(),
+        None => {
+            let from = image_from_dorkerfile(file)?;
+            eprintln!("Dorkerfile asks for {from}");
+            from
+        }
+    };
+    let r = ImageRef::parse(&image).map_err(errors::with(errors::CONFIG))?;
     let sdk = Sdk::locate().map_err(dep)?;
     let package = crate::sdk::package_for(&r);
     if sdk.system_images().iter().any(|i| i.package == package) {

@@ -290,6 +290,61 @@ fn json_flags_report_failures_as_json_or_plain_errors() {
 }
 
 #[test]
+fn pull_without_an_image_reads_the_dorkerfile() {
+    let e = Env::new("pull");
+    let dir = e.home.join("proj");
+    std::fs::create_dir_all(&dir).unwrap();
+    let pull = |args: &[&str]| {
+        e.cmd(args)
+            .current_dir(&dir)
+            .env("ANDROID_HOME", "/nonexistent")
+            .env("ANDROID_SDK_ROOT", "/nonexistent")
+            .env("HOME", "/nonexistent")
+            .output()
+            .unwrap()
+    };
+    // No Dorkerfile and no image: a clear configuration error that says what to do.
+    let o = pull(&["pull"]);
+    assert_eq!(code(&o), 2, "{}", text(&o.stderr));
+    assert!(
+        text(&o.stderr).contains("dorker pull android:35"),
+        "{}",
+        text(&o.stderr)
+    );
+    // A broken Dorkerfile reports its position.
+    write(&dir, "Dorkerfile", "FROM android:35\nMEM 2GB\n");
+    let o = pull(&["pull"]);
+    assert_eq!(code(&o), 2);
+    assert!(
+        text(&o.stderr).starts_with("Dorkerfile:2:1"),
+        "{}",
+        text(&o.stderr)
+    );
+    // A valid one names the FROM image; with no SDK the failure is a missing dependency.
+    write(
+        &dir,
+        "Dorkerfile",
+        "FROM android:36.1-google_apis_playstore\n",
+    );
+    let o = pull(&["pull"]);
+    assert_eq!(code(&o), 3, "{}", text(&o.stderr));
+    assert!(
+        text(&o.stderr).contains("Dorkerfile asks for android:36.1-google_apis_playstore"),
+        "{}",
+        text(&o.stderr)
+    );
+    // -f points at another file.
+    write(&dir, "Other.dorker", "FROM android:34\n");
+    let o = pull(&["pull", "-f", "Other.dorker"]);
+    assert!(
+        text(&o.stderr).contains("Dorkerfile asks for android:34")
+            || text(&o.stderr).contains("Other.dorker asks"),
+        "{}",
+        text(&o.stderr)
+    );
+}
+
+#[test]
 fn init_creates_a_parseable_dorkerfile_and_never_overwrites() {
     let e = Env::new("init");
     let dir = e.home.join("proj");
