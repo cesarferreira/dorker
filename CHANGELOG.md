@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.6] - 2026-11-05
+
+### 🚀 Features
+
+- Install .xapk bundles and add the playstore flavour shortcut
+- Number the build steps ([2/6] ...) so long builds show their progress
+- Add dorker commit to save a running instance as an image
+- Add enable-dev-mode.sh to the android-auto example
+
+### 🐛 Bug Fixes
+
+- Validate .xapk OBB install paths before using them in a device shell command
+- Enforce the .xapk unpack limit on bytes actually written
+- Android-auto setup steps build the Dorkerfile first; hint at it when an image is missing
+
+### 📚 Documentation
+
+- Add an Android Auto example that installs an .xapk fetched with apkeep
+- Keep the android-auto example's code block within 78 columns
+- Android-auto head unit setup steps, checked on an emulator
+- Keep the android-auto setup commands within 78 columns
+- Keep the android-auto README code within 78 columns
+- Drop the aa mention from the android-auto README and align its code comments
 ## [0.1.5] - 2026-11-05
 
 ### 🚀 Features
