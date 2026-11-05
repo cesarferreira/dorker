@@ -59,6 +59,17 @@ impl Sdk {
         self.root.join("platform-tools").join("adb")
     }
 
+    /// The SDK's `sdkmanager`, from `cmdline-tools/<version>/bin` (newest first).
+    pub fn sdkmanager(&self) -> Option<PathBuf> {
+        let base = self.root.join("cmdline-tools");
+        let mut dirs = read_dirs(&base);
+        // `latest` first, then the rest in reverse (newest) order.
+        dirs.sort_by_key(|d| std::cmp::Reverse(file_name(d) == "latest"));
+        dirs.into_iter()
+            .map(|d| d.join("bin").join("sdkmanager"))
+            .find(|p| p.is_file())
+    }
+
     /// Emulator version string, e.g. `37.2.12.0`.
     pub fn emulator_version(&self) -> Result<String> {
         let out = std::process::Command::new(self.emulator())
@@ -144,8 +155,9 @@ impl Sdk {
         };
         let have: Vec<String> = installed.iter().map(|i| i.package.clone()).collect();
         bail!(
-            "no installed Android API {} system image for {abi}\n\nRun:\n  sdkmanager \"{wanted}\"\n\n\
+            "no installed Android API {} system image for {abi}\n\nRun:\n  dorker pull android:{}\n(or: sdkmanager \"{wanted}\")\n\n\
              Installed images: {}",
+            image.api,
             image.api,
             if have.is_empty() {
                 "none".into()
@@ -154,6 +166,16 @@ impl Sdk {
             }
         )
     }
+}
+
+/// The `sdkmanager` package id for an image reference on this host.
+pub fn package_for(image: &ImageRef) -> String {
+    format!(
+        "system-images;android-{};{};{}",
+        image.api,
+        image.flavour.as_deref().unwrap_or("google_apis"),
+        host_abi()
+    )
 }
 
 /// Extract the first `<revision>` block's major/minor/micro as `a.b.c`.
@@ -254,6 +276,19 @@ mod tests {
             .resolve(&ImageRef::parse("android:34").unwrap())
             .unwrap_err();
         assert!(err.to_string().contains("sdkmanager"));
+    }
+
+    #[test]
+    fn package_names() {
+        let abi = host_abi();
+        assert_eq!(
+            package_for(&ImageRef::parse("android:35").unwrap()),
+            format!("system-images;android-35;google_apis;{abi}")
+        );
+        assert_eq!(
+            package_for(&ImageRef::parse("android:34-google_apis_playstore").unwrap()),
+            format!("system-images;android-34;google_apis_playstore;{abi}")
+        );
     }
 
     #[test]

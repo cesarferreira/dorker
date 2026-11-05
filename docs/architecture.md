@@ -8,7 +8,7 @@ itself. One crate, synchronous, no daemon.
 | Module | Responsibility |
 |---|---|
 | `main.rs` | clap CLI surface and dispatch |
-| `commands.rs` | `run`, `start`, `ps`, `exec`, `install`, `screenshot`, `logs`, `stop`, `rm`, `images`, `rmi`, `init` |
+| `commands.rs` | `run`, `start`, `pull`, `ps`, `exec`, `install`, `screenshot`, `logs`, `stop`, `rm`, `images`, `rmi`, `init` |
 | `doctor.rs` | host checks with remediation (`--json`) |
 | `sdk.rs` | locate the SDK, list installed system images, resolve `android:<api>[-flavour]` |
 | `store.rs` | instance metadata, lifecycle states, create lock, ids |
@@ -89,5 +89,5 @@ Transitions are validated by `State::can_become`.
 
 ## Not implemented yet
 
-Automatic system-image download, automatic test-APK
+Downloads that happen without `dorker pull`, automatic test-APK
 discovery, GPU-mode benchmarking, Linux validation, release packaging (Phase 5).

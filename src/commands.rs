@@ -455,6 +455,44 @@ pub fn rmi(key: &str) -> Result<i32> {
     Ok(0)
 }
 
+/// Install a system image with the SDK's own `sdkmanager` (it handles licences and
+/// downloads, and prompts on the terminal when a licence needs accepting).
+pub fn pull(image: &str) -> Result<i32> {
+    let dep = errors::with(errors::DEPENDENCY);
+    let r = ImageRef::parse(image).map_err(errors::with(errors::CONFIG))?;
+    let sdk = Sdk::locate().map_err(dep)?;
+    let package = crate::sdk::package_for(&r);
+    if sdk.system_images().iter().any(|i| i.package == package) {
+        println!("{package} is already installed");
+        return Ok(0);
+    }
+    let Some(manager) = sdk.sdkmanager() else {
+        return Err(dep(anyhow::anyhow!(
+            "sdkmanager not found under {}/cmdline-tools\n\nInstall the command-line tools:\n  brew install --cask android-commandlinetools",
+            sdk.root.display()
+        )));
+    };
+    eprintln!("Installing {package} with {}", manager.display());
+    let status = std::process::Command::new(&manager)
+        .arg(format!("--sdk_root={}", sdk.root.display()))
+        .arg("--install")
+        .arg(&package)
+        .status()
+        .context("running sdkmanager")?;
+    if !status.success() {
+        return Err(dep(anyhow::anyhow!(
+            "sdkmanager failed ({status}). Is the package name valid for this host? Try `sdkmanager --list | grep system-images`"
+        )));
+    }
+    if !sdk.system_images().iter().any(|i| i.package == package) {
+        return Err(dep(anyhow::anyhow!(
+            "sdkmanager finished but {package} is not installed"
+        )));
+    }
+    println!("{package} installed");
+    Ok(0)
+}
+
 pub fn init() -> Result<i32> {
     let path = std::path::Path::new("Dorkerfile");
     if path.exists() {

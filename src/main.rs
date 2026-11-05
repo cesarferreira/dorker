@@ -60,6 +60,8 @@ enum Command {
     },
     /// Remove an image
     Rmi { image: String },
+    /// Install a system image, e.g. `dorker pull android:35`
+    Pull { image: String },
     /// Create a starter Dorkerfile in the current directory
     Init,
     /// Run instrumentation tests in an instance
@@ -222,6 +224,7 @@ fn run(cli: Cli) -> Result<i32> {
             timeout,
             no_cache,
         }),
+        Command::Pull { image } => commands::pull(&image),
         Command::Init => commands::init(),
         Command::Test {
             instance,

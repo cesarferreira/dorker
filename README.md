@@ -69,6 +69,7 @@ image. macOS Apple Silicon is the supported platform. No Docker needed.
 
 ```bash
 dorker doctor                                   # check your setup
+dorker pull android:35                          # install a system image if missing
 dorker run -d --name test android:35            # boots a headless emulator
 dorker ps
 dorker exec test "getprop ro.build.version.sdk"
@@ -144,7 +145,7 @@ See [docs/architecture.md](docs/architecture.md) for design and limitations.
 ## Limitations
 
 - **Platform:** validated on macOS Apple Silicon only. Linux may work but is untested; Windows is unsupported.
-- **System images are not downloaded.** Install them with `sdkmanager`; `dorker doctor` and the error messages print the exact command.
+- **System images are installed on request, not automatically.** `dorker pull android:35` runs the SDK's `sdkmanager` (needs the command-line tools and may prompt for licences); `dorker run`/`build` print this command when an image is missing. The download path itself was only verified for the already-installed and nonexistent-package cases, not a real multi-GB download.
 - **Snapshots are strict.** A change of emulator version, system-image revision, memory or CPUs invalidates an image's snapshot. dorker then cold boots (about 15s) and says so. Snapshots are host-specific and not portable between machines.
 - **Memory:** a 2GB guest used about 5.5GB of host RAM in our measurements.
 - **Builds take about 45s** because dorker reboots the guest to persist provisioned state.
