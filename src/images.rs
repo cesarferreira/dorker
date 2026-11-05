@@ -120,9 +120,18 @@ pub fn find(store: &Store, key: &str) -> Result<ImageMeta> {
     let by_id: Vec<&ImageMeta> = all.iter().filter(|m| m.id.starts_with(key)).collect();
     match by_id.as_slice() {
         [one] => Ok((*one).clone()),
-        [] => bail!(
-            "no such image: {key}\n\nRun `dorker images` to list images, or `dorker build` to create one."
-        ),
+        [] => {
+            let here = if Path::new("Dorkerfile").is_file() {
+                "\n\nThere is a Dorkerfile in this folder: `dorker run` with no image builds and runs it, \
+                 or `dorker build -t {key} .` builds it under that name."
+                    .replace("{key}", key)
+            } else {
+                String::new()
+            };
+            bail!(
+                "no such image: {key}\n\nRun `dorker images` to list images, or `dorker build` to create one.{here}"
+            )
+        }
         _ => bail!("ambiguous image id prefix {key:?}"),
     }
 }

@@ -24,7 +24,7 @@ turn it on, and tools that drive a head unit (such as `aa`) report "head-unit se
 not start". Do it once on an instance and save it as an image:
 
 ```bash
-dorker run -d --name setup gearhead
+dorker run -d --name setup          # builds the Dorkerfile here, then runs it
 # Open Android Auto (scrcpy), then Settings: tap "Version" about 10 times,
 # accept the developer prompt and the first-run consent, then choose
 # More options > Start head unit server. The UI must be in English.
