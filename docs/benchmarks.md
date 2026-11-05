@@ -56,9 +56,10 @@ on 2026-11-05. Reproduce with the same command; add `--json` for machine-readabl
   spawned (checks and the clone, which is about 20 ms), then about 3.6 s until adb sees the
   device, and the app is ready about 60 ms after that. So the roughly 1 s gap to the plain
   emulator's quickboot (2.8 s) is the emulator's own snapshot load, not dorker's overhead.
-  Hypothesis, not verified: the baseline restores a snapshot it has just written (hot in the
-  page cache), while a fresh clone of the image has to be read from disk. Both meet the PRD's
-  under-5-second target for a prepared instance.
+  Tested: a fresh clone's 2.5 GB `ram.bin` takes 0.40-0.44 s to read the first time (a clone
+  does not share the page cache with its source) against 0.14-0.17 s when cached, so cache
+  misses account for about 0.25-0.3 s of the gap. The remaining ~0.7 s is unexplained. Both
+  meet the PRD's under-5-second target for a prepared instance.
 - **Disk:** a new instance of the 3.5 GB image costs **+19 MB** of physical storage (measured as
   the change in free space, which accounts for copy-on-write clones) against 3.5 GB logical.
   That is APFS cloning; on filesystems without clones (ext4) it is a full copy. An unprovisioned

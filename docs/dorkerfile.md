@@ -33,7 +33,7 @@ CMD launch com.example.application
 | `DISK` | `4GB` | Userdata partition size, 2GB-64GB. Default 4GB |
 | `DEVICE` | profile name | Written to the AVD (`hw.device.name`). Default `pixel_7` |
 | `RESOLUTION` | `WxH` | Default `1080x2400` |
-| `HEADLESS` | `true`/`false` | Default `true` |
+| `HEADLESS` | `true`/`false` | Default `true`. `false` opens the emulator's window (uses the windowed QEMU binary and `-gpu auto`). Verified on macOS: snapshot restore, `exec` and `screenshot` all work with the window open |
 | `GPU` | `swiftshader_indirect`, `angle_indirect`, `guest`, `host`, `off`, `auto` | Emulator graphics mode. Default `swiftshader_indirect` (works everywhere); `auto` when `HEADLESS false`. `host` needs a real GPU and display (fails on headless Linux VMs). Part of the snapshot identity, so it changes the image id. `dorker run --gpu` exists for base `android:<api>` runs only |
 | `INSTALL` | path | Repeatable. Relative to the build context; paths that escape it (`..`, symlinks) are rejected |
 | `SETTING` | `[global\|secure\|system] key value` | Repeatable. Namespace defaults to `global`. Only `[A-Za-z0-9_.:-]` is accepted |
