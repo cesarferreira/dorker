@@ -21,33 +21,32 @@ new image, because the file's hash is part of the image identity.
 
 Android Auto's developer mode is a setting inside the app, so installing the APK does not
 turn it on, and tools that drive a head unit (such as `aa`) report "head-unit server could
-not start". Do it once on an instance and save it as an image:
+not start". `enable-dev-mode.sh` does it for you on a running instance, then you save the
+instance as an image:
 
 ```bash
 dorker run -d --name setup          # builds the Dorkerfile here, then runs it
-dorker ps                           # note the ADB serial, e.g. emulator-5554
-scrcpy -s emulator-5554             # to see and tap the screen
+./enable-dev-mode.sh setup          # developer mode on, head unit server started
+dorker commit setup -t gearhead:ready
+dorker run -d --name auto gearhead:ready   # starts with the server listening
+aa session start                    # an openDHU session against it
+```
 
-# Android Auto has no launcher icon; open its settings directly:
+The script drives the app's UI over adb. It finds each button by its text, not by screen
+position, and it is safe to run again. It needs `adb` and `python3`, and the app's UI must
+be in English. A new instance from the committed image has the server already listening
+(port 5277 in the guest).
+
+To do it by hand instead: Android Auto has no launcher icon, so open its settings with
+
+```bash
 PKG=com.google.android.projection.gearhead
 adb -s emulator-5554 shell am start \
   -n $PKG/.companion.settings.DefaultSettingsActivity
 ```
 
-In the app (the UI must be in English):
-
-1. Scroll to the bottom and tap **Version and permission info** about 10 times.
-2. In the "Allow development settings?" dialog, choose **OK**.
-3. Open the **&#8942;** menu and choose **Start head unit server**.
-
-Then save it. A new instance from that image starts with the server already listening
-(port 5277 in the guest):
-
-```bash
-dorker commit setup -t gearhead:ready
-dorker run -d --name auto gearhead:ready
-aa session start                    # an openDHU session against it
-```
+then scroll to the bottom and tap **Version** about 10 times, choose **OK** in the "Allow
+development settings?" dialog, open the **&#8942;** menu and choose **Start head unit server**.
 
 Checked on an Apple Silicon Mac with `android:36-playstore` and Android Auto 17.9: the
 server survived the commit and a restore, and `aa session start` reached `running`.
