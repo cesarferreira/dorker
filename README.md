@@ -125,6 +125,13 @@ cargo test                          # unit + CLI tests, no emulator needed
 cargo test -- --ignored --test-threads=1   # end-to-end: boots real emulators (~2 min)
 ```
 
+### Diagnostics
+
+`dorker -v <command>` (or `DORKER_VERBOSE=1`) prints what dorker decides and runs to stderr: the
+located SDK, the boot mode and why, the exact emulator command line and environment, state
+transitions and timings. Each instance also keeps its raw emulator output in
+`~/.dorker/instances/<id>/emulator.log`.
+
 ### Exit codes
 
 | Code | Meaning |

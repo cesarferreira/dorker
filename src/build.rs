@@ -256,6 +256,14 @@ pub fn build(a: BuildArgs) -> Result<i32> {
         apks: &apks,
     };
     let fp = fingerprint(&inputs);
+    crate::log::vlog!(
+        "build fingerprint {fp} (system image {}@{}, emulator {}, {} apk(s), gpu {})",
+        sys.package,
+        revision,
+        emulator_version,
+        apks.len(),
+        df.gpu_mode()
+    );
     let id = fp[..12].to_string();
     let store = Store::open()?;
     let lock_path = file.parent().unwrap_or(&context).join("Dorkerfile.lock");
@@ -286,6 +294,11 @@ pub fn build(a: BuildArgs) -> Result<i32> {
     };
 
     let cached = !a.no_cache && images::image_dir(&store, &id).join("image.json").is_file();
+    crate::log::vlog!(
+        "cache {} for image {id} (--no-cache: {})",
+        if cached { "hit" } else { "miss" },
+        a.no_cache
+    );
     if cached {
         meta = images::find(&store, &id)?;
         eprintln!("Using cached image {id} (identical Dorkerfile, APKs and toolchain)");

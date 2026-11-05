@@ -127,6 +127,13 @@ impl Instance {
                 next.as_str()
             );
         }
+        crate::log::vlog!(
+            "instance {} ({}): {} -> {}",
+            self.name,
+            &self.id[..self.id.len().min(12)],
+            self.state.as_str(),
+            next.as_str()
+        );
         self.state = next;
         Ok(())
     }

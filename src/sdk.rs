@@ -44,6 +44,11 @@ impl Sdk {
         }
         for c in &candidates {
             if c.join("platform-tools").is_dir() || c.join("emulator").is_dir() {
+                crate::log::vlog!(
+                    "android sdk: {} (checked {} candidate paths)",
+                    c.display(),
+                    candidates.len()
+                );
                 return Ok(Self { root: c.clone() });
             }
         }

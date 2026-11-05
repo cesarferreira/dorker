@@ -5,6 +5,7 @@ mod doctor;
 mod dorkerfile;
 mod errors;
 mod images;
+mod log;
 mod runtime;
 mod sdk;
 mod store;
@@ -23,6 +24,10 @@ use clap::{Parser, Subcommand};
     about = "Docker for headless Android emulator environments"
 )]
 struct Cli {
+    /// Print what dorker decides and runs (emulator command line, boot mode, timings) to stderr.
+    /// Also enabled by DORKER_VERBOSE=1
+    #[arg(short, long, global = true)]
+    verbose: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -182,6 +187,14 @@ enum Command {
 
 fn main() {
     let cli = Cli::parse();
+    let env_on = std::env::var_os("DORKER_VERBOSE").is_some_and(|v| !v.is_empty() && v != "0");
+    log::set_verbose(cli.verbose || env_on);
+    log::vlog!(
+        "dorker {} on {} {}",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
     match run(cli) {
         Ok(code) => std::process::exit(code),
         Err(e) => {

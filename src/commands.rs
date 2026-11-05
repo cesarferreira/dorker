@@ -196,6 +196,9 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
                     m.emulator_version
                 );
             } else {
+                crate::log::vlog!(
+                    "snapshot {snap:?} is compatible (system image {rev}, emulator {emu}); restoring it"
+                );
                 boot = BootMode::Restore(snap.clone());
                 snapshot = Some(snap.clone());
             }
@@ -221,6 +224,10 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
     }
     let console_port =
         runtime::allocate_port(&store, a.adb_port).map_err(errors::with(errors::CONFLICT))?;
+    crate::log::vlog!(
+        "allocated console port {console_port} (adb {}), instance {id} named {name:?}",
+        console_port + 1
+    );
 
     let mut inst = Instance {
         id,
@@ -251,6 +258,7 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
         match &image_meta {
             Some(m) => {
                 let dst = store.instance_dir(&inst.id).join("avd");
+                crate::log::vlog!("cloning image {} to {}", m.id, dst.display());
                 runtime::clone_avd_home(&images::avd_home(&store, &m.id), &dst, m.api)?;
                 if overridden {
                     let cfg = dst

@@ -372,9 +372,24 @@ pub fn spawn_emulator(sdk: &Sdk, store: &Store, inst: &Instance, mode: &BootMode
         // Own process group so we can signal launcher + qemu together and so
         // Ctrl-C in the CLI does not hit the emulator directly.
         .process_group(0);
+    if crate::log::enabled() {
+        let args: Vec<std::ffi::OsString> = cmd.get_args().map(|a| a.to_os_string()).collect();
+        crate::log::vlog!("boot mode: {mode:?}");
+        crate::log::vlog!(
+            "env ANDROID_AVD_HOME={} ANDROID_SDK_ROOT={}",
+            dir.join("avd").display(),
+            sdk.root.display()
+        );
+        crate::log::vlog!(
+            "spawn: {}",
+            crate::log::render_command(&sdk.emulator(), &args)
+        );
+        crate::log::vlog!("emulator output: {}", dir.join("emulator.log").display());
+    }
     let child = cmd
         .spawn()
         .with_context(|| format!("starting {}", sdk.emulator().display()))?;
+    crate::log::vlog!("spawned pid {}", child.id());
     Ok(child.id())
 }
 
@@ -402,6 +417,10 @@ pub fn wait_ready(
             // Right after spawn the child can still be a copy of this process until
             // `exec` finishes (slow on network-backed SDK mounts); give it time.
             ProcState::Foreign if start.elapsed() < Duration::from_secs(15) => {
+                crate::log::vlog!(
+                    "pid {:?} is not the emulator yet (pre-exec window); waiting",
+                    inst.pid
+                );
                 std::thread::sleep(Duration::from_millis(100));
                 continue;
             }
@@ -434,11 +453,16 @@ pub fn wait_ready(
         let serial = inst.serial();
         if !seen_device && adb_getprop(sdk, &serial, "ro.build.version.sdk").is_some() {
             seen_device = true;
+            crate::log::vlog!(
+                "adb sees {serial} after {:.1}s; waiting for boot_completed and the package manager",
+                start.elapsed().as_secs_f64()
+            );
             inst.set_state(State::Booting)?;
             store.save(inst)?;
             on_booting();
         }
         if seen_device && is_ready(sdk, &serial) {
+            crate::log::vlog!("{serial} ready after {:.1}s", start.elapsed().as_secs_f64());
             inst.set_state(State::Ready)?;
             store.save(inst)?;
             return Ok(());
@@ -559,14 +583,23 @@ pub fn kill_instance(sdk: &Sdk, inst: &Instance, grace: Duration) {
         let _ = c.kill();
         let _ = c.wait();
     }
+    crate::log::vlog!(
+        "stopping {} (pid {pid}): adb emu kill, then SIGTERM/SIGKILL if it lingers",
+        inst.name
+    );
     let _ = adb(sdk, &inst.serial()).args(["emu", "kill"]).output();
     if wait_gone(inst, grace) {
         return;
     }
+    crate::log::vlog!(
+        "pid {pid} still alive after {}s; sending SIGTERM to its process group",
+        grace.as_secs()
+    );
     signal_group(pid, "-TERM");
     if wait_gone(inst, Duration::from_secs(5)) {
         return;
     }
+    crate::log::vlog!("pid {pid} ignored SIGTERM; sending SIGKILL");
     signal_group(pid, "-KILL");
     wait_gone(inst, Duration::from_secs(5));
 }
