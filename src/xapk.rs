@@ -32,6 +32,19 @@ fn file_name(entry: &str) -> &str {
     entry.rsplit('/').next().unwrap_or(entry)
 }
 
+/// A relative device path made only of plain components (letters, digits, `.`, `_`, `-`).
+/// The path ends up in a device shell command, so anything else (spaces, quotes, `;`, `$`,
+/// backticks) is refused, as are empty and `..` components.
+fn safe_device_path(p: &str) -> bool {
+    !p.is_empty()
+        && p.split('/').all(|c| {
+            !c.is_empty()
+                && c != ".."
+                && c.chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+        })
+}
+
 /// Decide what to install from the zip's entry names and its `manifest.json` (if any).
 /// Pure, so it is unit-tested.
 pub fn plan(manifest: Option<&serde_json::Value>, entries: &[String]) -> Result<Plan> {
@@ -99,7 +112,7 @@ pub fn plan(manifest: Option<&serde_json::Value>, entries: &[String]) -> Result<
                     }
                 },
             };
-            if install_path.split('/').any(|c| c == ".." || c.is_empty()) {
+            if !safe_device_path(&install_path) {
                 bail!("unsafe install_path {install_path:?} in manifest.json");
             }
             obbs.push((file.to_string(), format!("/sdcard/{install_path}")));
@@ -232,7 +245,9 @@ pub fn install(sdk: &Sdk, serial: &str, path: &Path, what: &str) -> Result<Strin
         crate::build::adb_checked(
             sdk,
             serial,
-            &["shell", "mkdir", "-p", dir],
+            // `adb shell` joins its arguments into one shell line. The path was
+            // checked by `safe_device_path` in `plan`, and is single-quoted as well.
+            &["shell", &format!("mkdir -p '{dir}'")],
             "creating the OBB folder",
         )?;
         output.push_str(&crate::build::adb_checked(
@@ -341,15 +356,24 @@ mod tests {
                 ),
             ]
         );
-        let bad = json!({
-            "package_name": "com.x",
-            "split_apks": [{"file": "com.x.apk"}],
-            "expansions": [{"file": "o.obb", "install_path": "../../etc/o.obb"}],
-        });
-        let err = plan(Some(&bad), &names(&["com.x.apk", "o.obb"]))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("unsafe"), "{err}");
+        for evil in [
+            "../../etc/o.obb",
+            "Android/obb/x;reboot;/o.obb",
+            "Android/obb/$(id)/o.obb",
+            "Android/obb/a b/o.obb",
+            "Android/obb/`id`/o.obb",
+            "Android/obb/a'b/o.obb",
+        ] {
+            let bad = json!({
+                "package_name": "com.x",
+                "split_apks": [{"file": "com.x.apk"}],
+                "expansions": [{"file": "o.obb", "install_path": evil}],
+            });
+            let err = plan(Some(&bad), &names(&["com.x.apk", "o.obb"]))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("unsafe"), "{evil}: {err}");
+        }
     }
 
     fn write_zip(path: &Path, files: &[(&str, &[u8])]) {
