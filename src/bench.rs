@@ -22,6 +22,7 @@ pub struct BenchArgs {
     pub skip_idle: bool,
     pub launch: Option<String>,
     pub baseline: bool,
+    pub pull: bool,
 }
 
 const MIB: u64 = 1024 * 1024;
@@ -100,9 +101,12 @@ pub fn baselines(a: &BenchArgs) -> Result<Baselines> {
     }
     let sdk = Sdk::locate().map_err(crate::errors::with(crate::errors::DEPENDENCY))?;
     let store = Store::open()?;
-    let sys = sdk
-        .resolve(&ImageRef::parse(&a.image).map_err(cfg)?)
-        .map_err(crate::errors::with(crate::errors::DEPENDENCY))?;
+    let sys = crate::commands::resolve_or_pull(
+        &sdk,
+        &ImageRef::parse(&a.image).map_err(cfg)?,
+        crate::commands::PullPolicy::from_flag(a.pull),
+    )
+    .map_err(crate::errors::with(crate::errors::DEPENDENCY))?;
     let mut out = Baselines {
         cold: vec![],
         quickboot: vec![],
@@ -343,6 +347,7 @@ pub fn run(a: BenchArgs) -> Result<i32> {
         timeout: a.timeout,
         gpu: a.gpu.clone(),
         json: false,
+        pull: a.pull,
     };
     let mut cold = Vec::new();
     let mut restore = Vec::new();

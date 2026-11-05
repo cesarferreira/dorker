@@ -33,8 +33,8 @@ The Android SDK (emulator, platform-tools) and a system image must be installed;
 | `dorker_doctor` | Check SDK, emulator, adb, acceleration, disk, images | `{ok, checks[]}` |
 | `dorker_ps` | List instances (`all` includes stopped) | `{instances[]}` |
 | `dorker_images` | List built images | `{images[]}` |
-| `dorker_build` | Build an image from a Dorkerfile (`context`, `tag`, `file`, `no_cache`) | `{image_id, build_log}` |
-| `dorker_run` | Start an instance from `android:35` or an image (`name`, `memory`, `cpus`, `rm`) | instance: `{id, name, status, serial, boot, ready_secs, ...}` |
+| `dorker_build` | Build an image from a Dorkerfile (`context`, `tag`, `file`, `no_cache`, `pull`) | `{image_id, build_log}` |
+| `dorker_run` | Start an instance from `android:35` or an image (`name`, `memory`, `cpus`, `rm`, `pull`) | instance: `{id, name, status, serial, boot, ready_secs, ...}` |
 | `dorker_start` / `dorker_stop` / `dorker_rm` | Restart, stop, remove an instance | instance / `{stopped[]}` / `{removed[]}` |
 | `dorker_exec` | Run a shell command in the guest | `{exit_code, stdout, stderr}` |
 | `dorker_install` | Install an APK from a host path | `{ok, output}` |
@@ -67,6 +67,7 @@ The server runs with your user's privileges and is meant for local, trusted agen
 - It never runs a host shell. Arguments are passed as an argument vector, and values for
   instance and image names that start with `-` are rejected so they cannot become flags.
 - Screenshots never touch a temporary file: the PNG is read from the CLI's stdout (`dorker screenshot <instance> -`), so there is no predictable path for another local user to pre-create.
+- `pull: true` on `dorker_run` / `dorker_build` installs a missing system image, which is a download of 1 GB or more and lets Google's `android` CLI accept the Android SDK licences for the user. It is off by default, the tool descriptions tell the model to ask first, and without it a missing image is an error that names the option.
 - ADB is not exposed on the network; instances use the emulator's local console and adb ports.
 - Tool calls run as separate `dorker` processes. Long calls (a build) do not block other requests.
 

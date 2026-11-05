@@ -169,6 +169,16 @@ repositories: x86_64 Linux pulled and booted `android-37.0/google_apis` (`ro.bui
 = 37), and the parser is tested against real `sdk list` output. If the listing cannot be read
 (legacy `sdkmanager`, offline), `pull` falls back to the old guessed name.
 
+## Pulling a missing image automatically
+
+`dorker build` and `run` used to stop with "run `dorker pull`". They now offer to install a
+missing base image (like `docker run` pulling), but only with consent: installing downloads
+1 GB or more and Google's `android` CLI accepts the SDK licences on the user's behalf, so on a
+terminal dorker asks first (Enter means yes), and without a terminal (CI, pipes, MCP agents) it
+fails with a hint unless `--pull` / `DORKER_PULL=1` is given. Verified for real through a
+pseudo-terminal on macOS: answering `n` installed nothing and wrote no licences; answering `y`
+downloaded `android-35/google_apis/arm64-v8a` and completed the build (109 s).
+
 ## Licensing
 
 - Google's scripts: Apache 2.0.

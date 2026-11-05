@@ -141,6 +141,12 @@ dorker rm -f t1
 dorker run --rm myapp:latest
 ```
 
+If the base image isn't installed, `dorker build` and `dorker run` offer to install
+it: on a terminal they ask first (it is a download of 1 GB or more, and Google's
+`android` CLI accepts the SDK licences for you). In scripts and CI, where nothing can be
+asked, they fail with a hint; pass `--pull` (or set `DORKER_PULL=1`) to install without
+asking.
+
 An identical rebuild is a cache hit (instant), and every `dorker run` gets its own isolated
 copy, so instances never share state. To try it without your own app, use the sample:
 

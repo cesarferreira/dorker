@@ -21,6 +21,8 @@ pub struct BuildArgs {
     pub context: PathBuf,
     pub timeout: u64,
     pub no_cache: bool,
+    /// Install a missing system image without asking (`--pull`).
+    pub pull: bool,
 }
 
 pub struct ResolvedApk {
@@ -217,9 +219,12 @@ pub fn build(a: BuildArgs) -> Result<i32> {
     let tag = a.tag.as_deref().map(images::normalize_tag).transpose()?;
 
     let sdk = Sdk::locate().map_err(errors::with(errors::DEPENDENCY))?;
-    let sys = sdk
-        .resolve(&df.from)
-        .map_err(errors::with(errors::DEPENDENCY))?;
+    let sys = crate::commands::resolve_or_pull(
+        &sdk,
+        &df.from,
+        crate::commands::PullPolicy::from_flag(a.pull),
+    )
+    .map_err(errors::with(errors::DEPENDENCY))?;
     let revision = sdk.system_image_revision(&sys)?;
     let emulator_version = sdk.emulator_version()?;
     let host_cpus = std::thread::available_parallelism()

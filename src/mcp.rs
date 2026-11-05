@@ -106,7 +106,8 @@ pub fn tools() -> Vec<Value> {
                     "context": {"type": "string", "description": "Build context directory containing the Dorkerfile (default \".\")"},
                     "tag": {"type": "string", "description": "Image name, e.g. myapp:latest"},
                     "file": {"type": "string", "description": "Dorkerfile path if not <context>/Dorkerfile"},
-                    "no_cache": {"type": "boolean"}
+                    "no_cache": {"type": "boolean"},
+                    "pull": {"type": "boolean", "description": "Install the Android system image first if it is missing (a download of 1 GB or more; Google's android CLI also accepts the Android SDK licences for the user). Off by default: ask the user before enabling."}
                 }),
                 &[],
             ),
@@ -123,7 +124,8 @@ pub fn tools() -> Vec<Value> {
                     "name": {"type": "string", "description": "Instance name (default: generated)"},
                     "memory": {"type": "string", "description": "Guest RAM, e.g. 2GB (overriding an image's value disables its snapshot)"},
                     "cpus": {"type": "integer", "minimum": 1},
-                    "rm": {"type": "boolean", "description": "Remove automatically when stopped"}
+                    "rm": {"type": "boolean", "description": "Remove automatically when stopped"},
+                    "pull": {"type": "boolean", "description": "Install the Android system image first if it is missing (a download of 1 GB or more; Google's android CLI also accepts the Android SDK licences for the user). Off by default: ask the user before enabling."}
                 }),
                 &["image"],
             ),
@@ -314,6 +316,9 @@ pub fn build_invocation(name: &str, args: &Value) -> Result<Invocation, String> 
             if opt_bool(args, "no_cache")? {
                 v.push(s("--no-cache"));
             }
+            if opt_bool(args, "pull")? {
+                v.push(s("--pull"));
+            }
             v.push(s("--"));
             v.push(context);
             (v, Kind::Build)
@@ -335,6 +340,9 @@ pub fn build_invocation(name: &str, args: &Value) -> Result<Invocation, String> 
             }
             if opt_bool(args, "rm")? {
                 v.push(s("--rm"));
+            }
+            if opt_bool(args, "pull")? {
+                v.push(s("--pull"));
             }
             v.push(image);
             (v, Kind::Json(None))
@@ -824,6 +832,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(inv.argv, ["build", "-t", "app:1", "--", "--evil"]);
+    }
+
+    #[test]
+    fn pull_is_opt_in_for_run_and_build() {
+        let argv = |tool: &str, args: Value| build_invocation(tool, &args).unwrap().argv;
+        assert!(
+            !argv("dorker_run", json!({"image": "android:37"})).contains(&"--pull".to_string()),
+            "off by default"
+        );
+        assert!(
+            argv("dorker_run", json!({"image": "android:37", "pull": true}))
+                .contains(&"--pull".to_string())
+        );
+        assert!(
+            argv("dorker_build", json!({"context": ".", "pull": true}))
+                .contains(&"--pull".to_string())
+        );
+        assert!(!argv("dorker_build", json!({"context": "."})).contains(&"--pull".to_string()));
+        assert!(
+            build_invocation("dorker_run", &json!({"image": "android:37", "pull": "yes"})).is_err()
+        );
+        // The tool descriptions warn about the download and the licence, so a model asks first.
+        let tools = tools();
+        for name in ["dorker_run", "dorker_build"] {
+            let t = tools.iter().find(|t| t["name"] == name).unwrap();
+            let d = t["inputSchema"]["properties"]["pull"]["description"]
+                .as_str()
+                .unwrap();
+            assert!(
+                d.contains("licences") && d.contains("ask the user"),
+                "{name}: {d}"
+            );
+        }
     }
 
     #[test]

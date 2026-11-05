@@ -27,7 +27,7 @@ CMD launch com.example.application
 
 | Directive | Arguments | Notes |
 |---|---|---|
-| `FROM` | `android:<api>[-<flavour>]` | Resolved against **installed** system images for the host ABI; `dorker pull` (no arguments) installs the one named here. `android:37` means the base release (`android-37.0`), `android:37.1` a specific minor release, and `-<flavour>` an explicit flavour such as `android:37-google_apis_ps16k`. `dorker versions` lists every version and flavour you can use (installed and available to pull); `pull` reads what Google actually publishes (some APIs only have 16 KB-page flavours) and lists the real choices when nothing matches. Without a flavour, `google_apis` is preferred, then `default`, then others |
+| `FROM` | `android:<api>[-<flavour>]` | Resolved against **installed** system images for the host ABI; `dorker pull` (no arguments) installs the one named here, and `dorker build` / `dorker run` offer to install it when it is missing (they ask on a terminal; `--pull` or `DORKER_PULL=1` installs without asking). `android:37` means the base release (`android-37.0`), `android:37.1` a specific minor release, and `-<flavour>` an explicit flavour such as `android:37-google_apis_ps16k`. `dorker versions` lists every version and flavour you can use (installed and available to pull); `pull` reads what Google actually publishes (some APIs only have 16 KB-page flavours) and lists the real choices when nothing matches. Without a flavour, `google_apis` is preferred, then `default`, then others |
 | `MEMORY` | `2GB`, `2048MB` | 1GB-32GB. Default 2GB |
 | `CPUS` | integer | 1-16, at most the host's cores. Default 2 |
 | `DISK` | `4GB` | Userdata partition size, 2GB-64GB. Default 4GB |

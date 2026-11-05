@@ -22,6 +22,8 @@ pub struct RunArgs {
     pub gpu: Option<String>,
     /// Print the started instance as JSON on stdout (requires `detach`).
     pub json: bool,
+    /// Install a missing system image without asking (`--pull`).
+    pub pull: bool,
 }
 
 /// An instance as machine-readable JSON, for `run --json`, `start --json` and the MCP server.
@@ -122,17 +124,19 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
             Some(m) => {
                 // Resolve by the exact package the image was built from, not by API
                 // level, so `android-36` and `android-36.1` can never be confused.
-                let sys = sdk
-                    .find_package(&m.system_image)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "image {} needs {} which is not installed\n\nRun:\n  android sdk install \"{}\"",
-                            m.id,
-                            m.system_image,
-                            m.system_image
-                        )
-                    })
-                    .map_err(dep)?;
+                let missing = anyhow::anyhow!(
+                    "image {} needs {} which is not installed\n\nInstall it with:\n  android sdk install \"{}\"",
+                    m.id,
+                    m.system_image,
+                    m.system_image
+                );
+                let sys = ensure_package(
+                    &sdk,
+                    &m.system_image,
+                    PullPolicy::from_flag(a.pull),
+                    missing,
+                )
+                .map_err(dep)?;
                 (
                     sys,
                     m.memory_mb,
@@ -145,9 +149,12 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
                 )
             }
             None => {
-                let sys = sdk
-                    .resolve(&ImageRef::parse(&a.image).map_err(cfg)?)
-                    .map_err(dep)?;
+                let sys = resolve_or_pull(
+                    &sdk,
+                    &ImageRef::parse(&a.image).map_err(cfg)?,
+                    PullPolicy::from_flag(a.pull),
+                )
+                .map_err(dep)?;
                 (
                     sys,
                     2048,
@@ -646,15 +653,135 @@ pub fn pull(image: Option<&str>, file: Option<&Path>) -> Result<i32> {
         println!("{} is already installed", img.package);
         return Ok(0);
     }
-    let Some(installer) = sdk.package_installer() else {
-        return Err(dep(anyhow::anyhow!(
+    let package = install_image(&sdk, &r, true)?;
+    println!("{package} installed");
+    Ok(0)
+}
+
+/// What to do when a required system image is not installed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PullPolicy {
+    /// Ask on a terminal; elsewhere fail with a hint to pass `--pull`.
+    Ask,
+    /// Install it without asking (`--pull` or `DORKER_PULL=1`).
+    Always,
+}
+
+impl PullPolicy {
+    pub fn from_flag(flag: bool) -> Self {
+        Self::from_flag_and_env(flag, std::env::var("DORKER_PULL").ok().as_deref())
+    }
+
+    /// Pure, so the environment handling can be unit-tested.
+    pub fn from_flag_and_env(flag: bool, env: Option<&str>) -> Self {
+        let env_on = env.is_some_and(|v| !v.is_empty() && v != "0");
+        if flag || env_on {
+            PullPolicy::Always
+        } else {
+            PullPolicy::Ask
+        }
+    }
+}
+
+/// Interpret a prompt answer: Enter and y/yes mean yes, n/no mean no, anything else is unclear.
+pub fn parse_yes(answer: &str) -> Option<bool> {
+    match answer.trim().to_ascii_lowercase().as_str() {
+        "" | "y" | "yes" => Some(true),
+        "n" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+/// Ask whether to install `what`. Only called when both stdin and stderr are terminals.
+fn confirm_install(what: &str) -> bool {
+    use std::io::{BufRead, Write};
+    eprintln!(
+        "{what} is not installed.\n  Installing it downloads it (usually 1 GB or more). Google's `android` CLI also\n  accepts the Android SDK licences on your behalf: https://developer.android.com/studio/terms"
+    );
+    for _ in 0..3 {
+        eprint!("Install {what} now? [Y/n] ");
+        let _ = std::io::stderr().flush();
+        let mut line = String::new();
+        if std::io::stdin().lock().read_line(&mut line).unwrap_or(0) == 0 {
+            return false; // EOF
+        }
+        if let Some(answer) = parse_yes(&line) {
+            return answer;
+        }
+        eprintln!("Please answer y or n.");
+    }
+    false
+}
+
+/// Decide whether to install a missing image. `Err` carries the final message when not.
+fn wants_install(policy: PullPolicy, what: &str, missing: &anyhow::Error) -> Result<bool> {
+    use std::io::IsTerminal;
+    match policy {
+        PullPolicy::Always => Ok(true),
+        PullPolicy::Ask => {
+            if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
+                if confirm_install(what) {
+                    Ok(true)
+                } else {
+                    Err(anyhow::anyhow!("{missing:#}\n\nNot installing {what}."))
+                }
+            } else {
+                Err(anyhow::anyhow!(
+                    "{missing:#}\n\nTo install it automatically, re-run with --pull (or set DORKER_PULL=1)."
+                ))
+            }
+        }
+    }
+}
+
+/// The image `r` means, installing it first (per `policy`) when it is missing.
+pub fn resolve_or_pull(
+    sdk: &Sdk,
+    r: &ImageRef,
+    policy: PullPolicy,
+) -> Result<crate::sdk::SystemImage> {
+    let missing = match sdk.resolve(r) {
+        Ok(img) => return Ok(img),
+        Err(e) => e,
+    };
+    wants_install(policy, &r.to_string(), &missing)?;
+    // On a terminal the prompt already described the licences, so skip the repeated note.
+    install_image(sdk, r, policy == PullPolicy::Always)?;
+    sdk.resolve(r)
+}
+
+/// An exact SDK package (what a built image was made from), installing it when missing.
+pub fn ensure_package(
+    sdk: &Sdk,
+    package: &str,
+    policy: PullPolicy,
+    missing: anyhow::Error,
+) -> Result<crate::sdk::SystemImage> {
+    if let Some(img) = sdk.find_package(package) {
+        return Ok(img);
+    }
+    wants_install(policy, package, &missing)?;
+    let installer = package_tool(sdk)?;
+    if policy == PullPolicy::Always {
+        licence_note(sdk, &installer);
+    }
+    run_installer(sdk, &installer, package)?;
+    sdk.find_package(package).ok_or(missing)
+}
+
+fn package_tool(sdk: &Sdk) -> Result<crate::sdk::Installer> {
+    sdk.package_installer().ok_or_else(|| {
+        errors::with(errors::DEPENDENCY)(anyhow::anyhow!(
             "no SDK package tool found under {}/cmdline-tools (looked for `android` and `sdkmanager`)\n\nInstall the Android command-line tools:\n  brew install --cask android-commandlinetools",
             sdk.root.display()
-        )));
-    };
-    // Verified: Google's `android` CLI accepts the SDK licence by itself (it writes
-    // licenses/android-sdk-license without asking, even with no terminal), so say so
-    // before it happens instead of doing it silently on the user's behalf.
+        ))
+    })
+}
+
+/// Verified: Google's `android` CLI accepts the SDK licence by itself (it writes
+/// licenses/android-sdk-license without asking, even with no terminal), so say so
+/// before it happens instead of doing it silently on the user's behalf.
+fn licence_note(sdk: &Sdk, installer: &crate::sdk::Installer) {
     if matches!(installer, crate::sdk::Installer::AndroidCli(_))
         && !sdk
             .root
@@ -671,9 +798,48 @@ pub fn pull(image: Option<&str>, file: Option<&Path>) -> Result<i32> {
             "note: Google's `android` CLI accepts the Android SDK licences on your behalf when it installs packages{arm}\n      Read them first: https://developer.android.com/studio/terms (Ctrl-C now to stop)."
         );
     }
+}
+
+/// Run the package tool for one package and verify it really landed on disk.
+fn run_installer(sdk: &Sdk, installer: &crate::sdk::Installer, package: &str) -> Result<()> {
+    let dep = errors::with(errors::DEPENDENCY);
+    eprintln!(
+        "Installing {package} with {} ({})",
+        installer.name(),
+        installer.path().display()
+    );
+    let status = installer
+        .command(&sdk.root, package)
+        .status()
+        .with_context(|| format!("running {}", installer.path().display()))?;
+    if !status.success() {
+        return Err(dep(anyhow::anyhow!(
+            "{} failed ({status}). Is the package name valid for this host? List what exists with `dorker versions`",
+            installer.name()
+        )));
+    }
+    // The SDK tools exit 0 even for a package that does not exist ("Package ... not found."),
+    // so success is only trusted once the image is really on disk.
+    if sdk.find_package(package).is_none() {
+        return Err(dep(anyhow::anyhow!(
+            "{package} is not installed after {} finished; it probably does not exist for this host.\nSee every version you can use: dorker versions",
+            installer.name()
+        )));
+    }
+    Ok(())
+}
+
+/// Install the published image `r` means (reading Google's repository to get the real package
+/// name) and return its package id.
+pub fn install_image(sdk: &Sdk, r: &ImageRef, show_licence_note: bool) -> Result<String> {
+    let dep = errors::with(errors::DEPENDENCY);
+    let installer = package_tool(sdk)?;
+    if show_licence_note {
+        licence_note(sdk, &installer);
+    }
     // Ask the repository what is actually published instead of guessing a package name: API 37
     // is `android-37.0` (not `android-37`), and some APIs only publish 16 KB-page flavours.
-    let package = match discover_remote(&sdk, &installer, &r) {
+    let package = match discover_remote(sdk, &installer, r) {
         Discovery::Chosen(img) => {
             eprintln!("{r} is published as {}", img.path);
             img.package_id()
@@ -681,36 +847,13 @@ pub fn pull(image: Option<&str>, file: Option<&Path>) -> Result<i32> {
         Discovery::Unavailable(candidates) => {
             return Err(dep(anyhow::anyhow!(
                 "{}",
-                unavailable_message(&r, &candidates)
+                unavailable_message(r, &candidates)
             )));
         }
-        Discovery::Unknown => crate::sdk::package_for(&r),
+        Discovery::Unknown => crate::sdk::package_for(r),
     };
-    eprintln!(
-        "Installing {package} with {} ({})",
-        installer.name(),
-        installer.path().display()
-    );
-    let status = installer
-        .command(&sdk.root, &package)
-        .status()
-        .with_context(|| format!("running {}", installer.path().display()))?;
-    if !status.success() {
-        return Err(dep(anyhow::anyhow!(
-            "{} failed ({status}). Is the package name valid for this host? List what exists with `android sdk list --all`",
-            installer.name()
-        )));
-    }
-    // The SDK tools exit 0 even for a package that does not exist ("Package ... not found."),
-    // so success is only trusted once the image is really on disk.
-    if !sdk.system_images().iter().any(|i| i.package == package) {
-        return Err(dep(anyhow::anyhow!(
-            "{package} is not installed after {} finished; it probably does not exist for this host.\nList what is available with: android sdk list --all",
-            installer.name()
-        )));
-    }
-    println!("{package} installed");
-    Ok(0)
+    run_installer(sdk, &installer, &package)?;
+    Ok(package)
 }
 
 pub fn init() -> Result<i32> {
@@ -1086,5 +1229,68 @@ mod tests {
         let mut v = frame(50, 50, |_| [7, 7, 7, 255]);
         v.splice(12..12, [0u8; 4]);
         assert!(frame_is_blank(&v));
+    }
+}
+
+#[cfg(test)]
+mod pull_policy_tests {
+    use super::*;
+
+    #[test]
+    fn pull_is_on_for_the_flag_or_a_truthy_environment_variable() {
+        assert_eq!(PullPolicy::from_flag_and_env(false, None), PullPolicy::Ask);
+        assert_eq!(
+            PullPolicy::from_flag_and_env(true, None),
+            PullPolicy::Always
+        );
+        assert_eq!(
+            PullPolicy::from_flag_and_env(false, Some("1")),
+            PullPolicy::Always
+        );
+        assert_eq!(
+            PullPolicy::from_flag_and_env(false, Some("true")),
+            PullPolicy::Always
+        );
+        assert_eq!(
+            PullPolicy::from_flag_and_env(false, Some("0")),
+            PullPolicy::Ask,
+            "0 means off"
+        );
+        assert_eq!(
+            PullPolicy::from_flag_and_env(false, Some("")),
+            PullPolicy::Ask
+        );
+        assert_eq!(
+            PullPolicy::from_flag_and_env(true, Some("0")),
+            PullPolicy::Always,
+            "the flag wins"
+        );
+    }
+
+    #[test]
+    fn prompt_answers_default_to_yes_and_reject_nonsense() {
+        for yes in ["", "\n", "y", "Y", "yes", " YES \n"] {
+            assert_eq!(parse_yes(yes), Some(true), "{yes:?}");
+        }
+        for no in ["n", "N", "no", "No\n"] {
+            assert_eq!(parse_yes(no), Some(false), "{no:?}");
+        }
+        for unclear in ["maybe", "yy", "1", "nope"] {
+            assert_eq!(parse_yes(unclear), None, "{unclear:?}");
+        }
+    }
+
+    #[test]
+    fn without_a_terminal_a_missing_image_fails_with_a_hint_and_never_installs() {
+        // Under `cargo test` stdin is not a terminal, so Ask must not block or install.
+        let missing = anyhow::anyhow!("no installed Android API 99 system image");
+        let err = wants_install(PullPolicy::Ask, "android:99", &missing).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("no installed Android API 99"), "{msg}");
+        assert!(
+            msg.contains("--pull") && msg.contains("DORKER_PULL=1"),
+            "{msg}"
+        );
+        assert!(wants_install(PullPolicy::Always, "android:99", &missing).unwrap());
     }
 }

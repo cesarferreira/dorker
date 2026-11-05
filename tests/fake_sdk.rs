@@ -14,6 +14,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 const EMULATOR: &str = r#"#!/bin/sh
+if [ "$1" = "-version" ]; then
+  echo "Android emulator version 99.0.0.0 (build_id 1) (CL:N/A)"
+  exit 0
+fi
 port=
 while [ $# -gt 0 ]; do
   [ "$1" = "-port" ] && port=$2
@@ -561,6 +565,7 @@ if [ -n "$FAKE_PULL_NOOP" ]; then
 fi
 dir="$root/$(echo "$pkg" | tr ';' '/')"
 mkdir -p "$dir" && echo x > "$dir/system.img"
+printf '<localPackage><revision><major>1</major></revision></localPackage>' > "$dir/package.xml"
 "#;
 
 const SDKMANAGER: &str = r#"#!/bin/sh
@@ -646,8 +651,8 @@ fn pull_does_not_trust_a_tool_that_exits_zero_without_installing() {
     let err = text(&out.stderr);
     assert!(err.contains("is not installed after"), "{err}");
     assert!(
-        err.contains("android sdk list --all"),
-        "points at the replacement tool: {err}"
+        err.contains("dorker versions"),
+        "points at the command that lists what exists: {err}"
     );
     assert!(
         !err.contains("sdkmanager"),
@@ -1040,6 +1045,162 @@ fn pull_errors_point_at_dorker_versions() {
         .env("FAKE_LIST_FILE", &listing)
         .output()
         .unwrap();
+    assert!(
+        text(&out.stderr).contains("dorker versions"),
+        "{}",
+        text(&out.stderr)
+    );
+}
+
+// ---------- automatic pulling of a missing system image ----------
+
+#[test]
+fn run_installs_a_missing_image_only_when_told_to() {
+    let _guard = serial();
+    let f = Fake::new("autopull-run", false);
+    write_exec(&f.sdk.join("cmdline-tools/latest/bin/android"), ANDROID_CLI);
+    let listing = repo_listing(&f);
+    let with = |args: &[&str], env: &[(&str, &str)]| {
+        let mut c = f.cmd(args);
+        c.env("FAKE_LIST_FILE", &listing);
+        for (k, v) in env {
+            c.env(k, v);
+        }
+        c.output().unwrap()
+    };
+
+    // Not a terminal (CI, scripts, agents): fail as before, and say how to opt in. Nothing is
+    // downloaded or licence-accepted behind the user's back.
+    let out = with(&["run", "-d", "android:37"], &[]);
+    assert_eq!(code(&out), 3, "{}", text(&out.stderr));
+    let err = text(&out.stderr);
+    assert!(err.contains("dorker pull android:37"), "{err}");
+    assert!(
+        err.contains("--pull") && err.contains("DORKER_PULL=1"),
+        "{err}"
+    );
+    assert!(
+        !f.piddir.join("android-args.txt").exists(),
+        "nothing was installed"
+    );
+
+    // --pull: install it, then carry on and start the instance.
+    let out = with(
+        &[
+            "run",
+            "-d",
+            "--pull",
+            "--json",
+            "--name",
+            "p1",
+            "android:37",
+        ],
+        &[],
+    );
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let inst: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(inst["status"], "READY");
+    let args = std::fs::read_to_string(f.piddir.join("android-args.txt")).unwrap();
+    assert!(
+        args.contains(&format!(
+            "sdk install system-images;android-37.0;google_apis;{}",
+            host_abi()
+        )),
+        "{args}"
+    );
+    assert!(
+        text(&out.stderr).contains("accepts the Android SDK licences on your behalf"),
+        "the licence is still announced"
+    );
+
+    // Once installed, no flag is needed.
+    let out = with(&["run", "-d", "--name", "p2", "android:37"], &[]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+}
+
+#[test]
+fn the_environment_variable_turns_on_pulling_for_scripts() {
+    let _guard = serial();
+    let f = Fake::new("autopull-env", false);
+    write_exec(&f.sdk.join("cmdline-tools/latest/bin/android"), ANDROID_CLI);
+    let listing = repo_listing(&f);
+    let out = f
+        .cmd(&["run", "-d", "--name", "e1", "android:37"])
+        .env("FAKE_LIST_FILE", &listing)
+        .env("DORKER_PULL", "1")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    // DORKER_PULL=0 is off.
+    let f2 = Fake::new("autopull-env0", false);
+    write_exec(
+        &f2.sdk.join("cmdline-tools/latest/bin/android"),
+        ANDROID_CLI,
+    );
+    let listing2 = repo_listing(&f2);
+    let out = f2
+        .cmd(&["run", "-d", "android:37"])
+        .env("FAKE_LIST_FILE", &listing2)
+        .env("DORKER_PULL", "0")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 3);
+}
+
+#[test]
+fn build_pulls_the_dorkerfiles_missing_base_image_with_the_flag() {
+    let _guard = serial();
+    let f = Fake::new("autopull-build", false);
+    write_exec(&f.sdk.join("cmdline-tools/latest/bin/android"), ANDROID_CLI);
+    let listing = repo_listing(&f);
+    let ctx = f.root.join("ctx");
+    std::fs::create_dir_all(&ctx).unwrap();
+    std::fs::write(ctx.join("Dorkerfile"), "FROM android:37\n").unwrap();
+    let ctx_s = ctx.to_str().unwrap();
+
+    // Without the flag the build stops before doing anything, with the hint.
+    let out = f
+        .cmd(&["build", "-t", "t:1", ctx_s])
+        .env("FAKE_LIST_FILE", &listing)
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 3, "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("--pull"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert!(!f.piddir.join("android-args.txt").exists());
+
+    // With it: the base image is installed, then the whole build runs against the fake emulator.
+    let out = f
+        .cmd(&["build", "-t", "t:1", "--pull", ctx_s])
+        .env("FAKE_LIST_FILE", &listing)
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let args = std::fs::read_to_string(f.piddir.join("android-args.txt")).unwrap();
+    assert!(
+        args.contains("system-images;android-37.0;google_apis;"),
+        "{args}"
+    );
+    let images = text(&f.run(&["images"]).stdout);
+    assert!(images.contains("t "), "{images}");
+    assert!(f.live_emulators().is_empty(), "the build instance is gone");
+}
+
+#[test]
+fn a_pull_that_cannot_succeed_still_reports_what_exists() {
+    let _guard = serial();
+    let f = Fake::new("autopull-unavailable", false);
+    write_exec(&f.sdk.join("cmdline-tools/latest/bin/android"), ANDROID_CLI);
+    let listing = repo_listing(&f);
+    let out = f
+        .cmd(&["run", "-d", "--pull", "android:99"])
+        .env("FAKE_LIST_FILE", &listing)
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 3, "{}", text(&out.stderr));
     assert!(
         text(&out.stderr).contains("dorker versions"),
         "{}",

@@ -60,6 +60,10 @@ enum Command {
         /// Seconds to wait for Android to boot
         #[arg(long, default_value_t = 300)]
         timeout: u64,
+        /// Install a missing system image without asking (also DORKER_PULL=1). Google's
+        /// `android` CLI accepts the SDK licences for you when it installs.
+        #[arg(long)]
+        pull: bool,
     },
     /// List images
     Images {
@@ -133,6 +137,10 @@ enum Command {
         /// snapshot) as a baseline. Base `android:<api>` images only.
         #[arg(long)]
         baseline: bool,
+        /// Install a missing system image without asking (also DORKER_PULL=1). Google's
+        /// `android` CLI accepts the SDK licences for you when it installs.
+        #[arg(long)]
+        pull: bool,
     },
     /// Launch an instance from an image (e.g. android:35)
     Run {
@@ -165,6 +173,10 @@ enum Command {
         /// Print the started instance as JSON on stdout (requires --detach)
         #[arg(long)]
         json: bool,
+        /// Install a missing system image without asking (also DORKER_PULL=1). Google's
+        /// `android` CLI accepts the SDK licences for you when it installs.
+        #[arg(long)]
+        pull: bool,
     },
     /// List instances
     Ps {
@@ -279,6 +291,7 @@ fn run(cli: Cli) -> Result<i32> {
             timeout,
             gpu,
             json,
+            pull,
         } => commands::run(commands::RunArgs {
             image,
             name,
@@ -290,6 +303,7 @@ fn run(cli: Cli) -> Result<i32> {
             timeout,
             gpu,
             json,
+            pull,
         }),
         Command::Build {
             context,
@@ -297,12 +311,14 @@ fn run(cli: Cli) -> Result<i32> {
             tag,
             no_cache,
             timeout,
+            pull,
         } => build::build(build::BuildArgs {
             file,
             tag,
             context,
             timeout,
             no_cache,
+            pull,
         }),
         Command::Versions { api, all, json } => versions::run(api, all, json),
         Command::Pull { image, file } => commands::pull(image.as_deref(), file.as_deref()),
@@ -325,6 +341,7 @@ fn run(cli: Cli) -> Result<i32> {
             skip_idle,
             launch,
             baseline,
+            pull,
         } => bench::run(bench::BenchArgs {
             image,
             runs: runs.max(1),
@@ -335,6 +352,7 @@ fn run(cli: Cli) -> Result<i32> {
             skip_idle,
             launch,
             baseline,
+            pull,
         }),
         Command::Images { json } => commands::images(json),
         Command::Rmi { image } => commands::rmi(&image),
