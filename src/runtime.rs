@@ -179,14 +179,51 @@ fn ps_info(pid: u32) -> Option<(u32, String)> {
     Some((pgid.trim().parse().ok()?, cmd.trim().to_string()))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcState {
+    /// Alive and running this instance's emulator.
+    Ours,
+    /// Alive but not (yet) the emulator: a reused pid, or a freshly forked child
+    /// that has not finished `exec`.
+    Foreign,
+    /// Gone (or a zombie).
+    Dead,
+}
+
+/// Full command line of a process. On Linux `/proc/<pid>/cmdline` is exact; `ps`
+/// can truncate and has to be spawned, so it is only the fallback (macOS).
+fn cmdline_of(pid: u32) -> Option<String> {
+    if let Ok(bytes) = std::fs::read(format!("/proc/{pid}/cmdline")) {
+        if !bytes.is_empty() {
+            return Some(
+                String::from_utf8_lossy(&bytes)
+                    .replace('\0', " ")
+                    .trim()
+                    .to_string(),
+            );
+        }
+    }
+    ps_info(pid).map(|(_, cmd)| cmd)
+}
+
+pub fn process_state(inst: &Instance) -> ProcState {
+    let Some(pid) = inst.pid else {
+        return ProcState::Dead;
+    };
+    match cmdline_of(pid) {
+        None => ProcState::Dead,
+        Some(cmd) if cmd.contains("<defunct>") => ProcState::Dead,
+        Some(cmd) if cmd.contains(&format!("-avd {AVD_NAME} -port {}", inst.console_port)) => {
+            ProcState::Ours
+        }
+        Some(_) => ProcState::Foreign,
+    }
+}
+
 /// True only if `pid` is alive AND is the emulator we launched for this instance.
 /// Guards against PID reuse before signalling anything.
 pub fn is_our_process(inst: &Instance) -> bool {
-    let Some(pid) = inst.pid else { return false };
-    match ps_info(pid) {
-        Some((_, cmd)) => cmd.contains(&format!("-avd {AVD_NAME} -port {}", inst.console_port)),
-        None => false,
-    }
+    process_state(inst) == ProcState::Ours
 }
 
 fn signal_group(pid: u32, sig: &str) {
@@ -207,7 +244,10 @@ pub fn reconcile(store: &Store, inst: &mut Instance) -> Result<()> {
         store.save(inst)?;
         return Ok(());
     }
-    if inst.state.expects_process() && !is_our_process(inst) {
+    let pstate = process_state(inst);
+    // A STARTING instance whose pid is still a pre-exec copy of the CLI is not dead.
+    let starting_pre_exec = inst.state == State::Starting && pstate == ProcState::Foreign;
+    if inst.state.expects_process() && pstate != ProcState::Ours && !starting_pre_exec {
         let next = if inst.state == State::Stopping {
             State::Stopped
         } else {
@@ -356,14 +396,32 @@ pub fn wait_ready(
     let start = Instant::now();
     let mut seen_device = false;
     loop {
-        if !is_our_process(inst) {
-            inst.set_state(State::Failed)?;
-            inst.pid = None;
-            store.save(inst)?;
-            bail!(
-                "emulator exited during startup\n\n{}",
-                log_tail(&store.instance_dir(&inst.id).join("emulator.log"), 15)
-            );
+        match process_state(inst) {
+            ProcState::Ours => {}
+            // Right after spawn the child can still be a copy of this process until
+            // `exec` finishes (slow on network-backed SDK mounts); give it time.
+            ProcState::Foreign if start.elapsed() < Duration::from_secs(15) => {
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            state => {
+                let seen = inst
+                    .pid
+                    .and_then(cmdline_of)
+                    .unwrap_or_else(|| "no such process".into());
+                inst.set_state(State::Failed)?;
+                inst.pid = None;
+                store.save(inst)?;
+                let what = if state == ProcState::Dead {
+                    "exited during startup"
+                } else {
+                    "was replaced by an unrelated process"
+                };
+                bail!(
+                    "emulator {what} (last seen: {seen})\n\n{}",
+                    log_tail(&store.instance_dir(&inst.id).join("emulator.log"), 15)
+                );
+            }
         }
         if cancelled() {
             kill_instance(sdk, inst, Duration::from_secs(5));
@@ -568,6 +626,7 @@ mod tests {
     fn image() -> SystemImage {
         SystemImage {
             api: 35,
+            minor: None,
             flavour: "google_apis".into(),
             abi: "arm64-v8a".into(),
             sysdir: "system-images/android-35/google_apis/arm64-v8a/".into(),
@@ -676,6 +735,36 @@ mod tests {
         reconcile(&store, &mut a).unwrap();
         assert_eq!(a.state, State::Failed);
         assert_eq!(store.find("t").unwrap().state, State::Failed);
+    }
+
+    #[test]
+    fn process_state_distinguishes_ours_foreign_and_dead() {
+        let mut a = inst();
+        a.console_port = 5998;
+        // Our own pid is alive but is not the emulator.
+        a.pid = Some(std::process::id());
+        assert_eq!(process_state(&a), ProcState::Foreign);
+        // A process whose command line carries the instance's emulator arguments.
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 30; true # -avd dorker -port 5998"])
+            .spawn()
+            .unwrap();
+        a.pid = Some(child.id());
+        // Linux reads /proc, macOS falls back to ps; either way allow exec to finish.
+        let mut state = ProcState::Foreign;
+        for _ in 0..50 {
+            state = process_state(&a);
+            if state == ProcState::Ours {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(state, ProcState::Ours);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(process_state(&a), ProcState::Dead);
+        a.pid = None;
+        assert_eq!(process_state(&a), ProcState::Dead);
     }
 
     #[test]

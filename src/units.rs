@@ -16,10 +16,12 @@ pub fn parse_size_mb(input: &str) -> Result<u64> {
     }
 }
 
-/// An image reference such as `android:35` or `android:35-google_apis`.
+/// An image reference such as `android:35`, `android:36.1` or `android:35-google_apis`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageRef {
     pub api: u32,
+    /// Minor SDK version (`36.1`). `None` matches any, preferring the plain major.
+    pub minor: Option<u32>,
     pub flavour: Option<String>,
 }
 
@@ -35,10 +37,17 @@ impl ImageRef {
             Some((api, flavour)) if !flavour.is_empty() => (api, Some(flavour.to_string())),
             _ => (tag, None),
         };
-        let api: u32 = api
-            .parse()
-            .map_err(|_| anyhow::anyhow!("invalid Android API level in {input:?}"))?;
-        Ok(Self { api, flavour })
+        let bad = || anyhow::anyhow!("invalid Android API level in {input:?}");
+        let (major, minor) = match api.split_once('.') {
+            Some((a, b)) => (a, Some(b.parse::<u32>().map_err(|_| bad())?)),
+            None => (api, None),
+        };
+        let api: u32 = major.parse().map_err(|_| bad())?;
+        Ok(Self {
+            api,
+            minor,
+            flavour,
+        })
     }
 }
 
@@ -62,6 +71,9 @@ mod tests {
         assert_eq!((r.api, r.flavour), (35, None));
         let r = ImageRef::parse("android:35-google_apis").unwrap();
         assert_eq!(r.flavour.as_deref(), Some("google_apis"));
+        let r = ImageRef::parse("android:36.1-google_apis_playstore").unwrap();
+        assert_eq!((r.api, r.minor), (36, Some(1)));
+        assert!(ImageRef::parse("android:36.x").is_err());
         assert!(ImageRef::parse("myapp:latest").is_err());
         assert!(ImageRef::parse("android:abc").is_err());
     }

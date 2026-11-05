@@ -173,6 +173,7 @@ pub fn parse(file: &str, source: &str) -> Result<Dorkerfile, ParseError> {
     let mut d = Dorkerfile {
         from: ImageRef {
             api: 0,
+            minor: None,
             flavour: None,
         },
         memory_mb: 2048,

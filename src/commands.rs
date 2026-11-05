@@ -88,13 +88,18 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
     let (sys, mut memory_mb, mut cpus, disk_mb, headless, device, (width, height)) =
         match &image_meta {
             Some(m) => {
-                let r = ImageRef {
-                    api: m.api,
-                    flavour: Some(m.flavour.clone()),
-                };
+                // Resolve by the exact package the image was built from, not by API
+                // level, so `android-36` and `android-36.1` can never be confused.
                 let sys = sdk
-                    .resolve(&r)
-                    .with_context(|| format!("image {} needs {}", m.id, m.system_image))
+                    .find_package(&m.system_image)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "image {} needs {} which is not installed\n\nRun:\n  sdkmanager \"{}\"",
+                            m.id,
+                            m.system_image,
+                            m.system_image
+                        )
+                    })
                     .map_err(dep)?;
                 (
                     sys,

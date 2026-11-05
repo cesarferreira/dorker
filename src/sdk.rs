@@ -12,6 +12,8 @@ pub struct Sdk {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SystemImage {
     pub api: u32,
+    /// Minor SDK version for directories like `android-36.1`.
+    pub minor: Option<u32>,
     pub flavour: String,
     pub abi: String,
     /// Path relative to the SDK root, with trailing slash (the `image.sysdir.1` format).
@@ -99,7 +101,7 @@ impl Sdk {
         let mut out = Vec::new();
         for api_dir in read_dirs(&base) {
             let name = file_name(&api_dir);
-            let Some(api) = name.strip_prefix("android-").and_then(parse_api) else {
+            let Some((api, minor)) = name.strip_prefix("android-").and_then(parse_api) else {
                 continue;
             };
             for flavour_dir in read_dirs(&api_dir) {
@@ -112,6 +114,7 @@ impl Sdk {
                     let abi = file_name(&abi_dir);
                     out.push(SystemImage {
                         api,
+                        minor,
                         sysdir: format!("system-images/{name}/{flavour}/{abi}/"),
                         package: format!("system-images;{name};{flavour};{abi}"),
                         flavour,
@@ -136,8 +139,12 @@ impl Sdk {
         let matching: Vec<&SystemImage> = installed
             .iter()
             .filter(|i| i.api == image.api && i.abi == abi)
+            .filter(|i| image.minor.is_none() || i.minor == image.minor)
             .filter(|i| image.flavour.as_ref().is_none_or(|f| &i.flavour == f))
             .collect();
+        // With no explicit minor, the plain major (`android-36`) beats `android-36.1`.
+        let mut matching = matching;
+        matching.sort_by_key(|i| i.minor.is_some());
         // Prefer the flavours most useful for automation: Google APIs without Play
         // Store first, then AOSP, then Play images.
         const PREFERENCE: [&str; 3] = ["google_apis", "default", "aosp_atd"];
@@ -149,16 +156,12 @@ impl Sdk {
         if let Some(i) = matching.first() {
             return Ok((*i).clone());
         }
-        let wanted = match &image.flavour {
-            Some(f) => format!("system-images;android-{};{f};{abi}", image.api),
-            None => format!("system-images;android-{};google_apis;{abi}", image.api),
-        };
+        let wanted = package_for(image);
+        let shown = version_label(image.api, image.minor);
         let have: Vec<String> = installed.iter().map(|i| i.package.clone()).collect();
         bail!(
-            "no installed Android API {} system image for {abi}\n\nRun:\n  dorker pull android:{}\n(or: sdkmanager \"{wanted}\")\n\n\
+            "no installed Android API {shown} system image for {abi}\n\nRun:\n  dorker pull android:{shown}\n(or: sdkmanager \"{wanted}\")\n\n\
              Installed images: {}",
-            image.api,
-            image.api,
             if have.is_empty() {
                 "none".into()
             } else {
@@ -172,10 +175,27 @@ impl Sdk {
 pub fn package_for(image: &ImageRef) -> String {
     format!(
         "system-images;android-{};{};{}",
-        image.api,
+        version_label(image.api, image.minor),
         image.flavour.as_deref().unwrap_or("google_apis"),
         host_abi()
     )
+}
+
+/// `36` or `36.1`.
+pub fn version_label(api: u32, minor: Option<u32>) -> String {
+    match minor {
+        Some(m) => format!("{api}.{m}"),
+        None => api.to_string(),
+    }
+}
+
+impl Sdk {
+    /// An installed image by exact SDK package id (`system-images;android-36.1;...`).
+    pub fn find_package(&self, package: &str) -> Option<SystemImage> {
+        self.system_images()
+            .into_iter()
+            .find(|i| i.package == package)
+    }
 }
 
 /// Extract the first `<revision>` block's major/minor/micro as `a.b.c`.
@@ -196,9 +216,12 @@ pub fn parse_revision(xml: &str) -> Option<String> {
     ))
 }
 
-fn parse_api(s: &str) -> Option<u32> {
-    // `37.0` style directories carry a minor version; keep the major.
-    s.split('.').next()?.parse().ok()
+fn parse_api(s: &str) -> Option<(u32, Option<u32>)> {
+    // `37.0` style directories carry a minor version.
+    match s.split_once('.') {
+        Some((a, b)) => Some((a.parse().ok()?, Some(b.parse().ok()?))),
+        None => Some((s.parse().ok()?, None)),
+    }
 }
 
 fn read_dirs(p: &Path) -> Vec<PathBuf> {
@@ -261,6 +284,43 @@ mod tests {
         assert_eq!(
             r.sysdir,
             format!("system-images/android-35/google_apis/{abi}/")
+        );
+    }
+
+    #[test]
+    fn minor_versions_are_distinct() {
+        let abi = host_abi();
+        let d = crate::testutil::Dir::new();
+        for api in ["36", "36.1"] {
+            let p = d
+                .path()
+                .join(format!("system-images/android-{api}/google_apis/{abi}"));
+            std::fs::create_dir_all(&p).unwrap();
+            std::fs::write(p.join("system.img"), b"x").unwrap();
+        }
+        let sdk = Sdk {
+            root: d.path().to_path_buf(),
+        };
+        assert_eq!(sdk.system_images().len(), 2);
+        // Plain `android:36` prefers the plain major directory.
+        let r = sdk
+            .resolve(&ImageRef::parse("android:36").unwrap())
+            .unwrap();
+        assert_eq!(r.minor, None);
+        // An explicit minor selects exactly that one.
+        let r = sdk
+            .resolve(&ImageRef::parse("android:36.1").unwrap())
+            .unwrap();
+        assert_eq!(r.minor, Some(1));
+        assert!(r.package.contains("android-36.1"));
+        assert!(
+            sdk.resolve(&ImageRef::parse("android:36.2").unwrap())
+                .is_err()
+        );
+        assert!(sdk.find_package(&r.package).is_some());
+        assert_eq!(
+            package_for(&ImageRef::parse("android:36.1").unwrap()),
+            format!("system-images;android-36.1;google_apis;{abi}")
         );
     }
 

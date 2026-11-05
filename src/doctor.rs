@@ -116,7 +116,13 @@ fn collect() -> Vec<Check> {
         } else {
             let list: Vec<String> = host
                 .iter()
-                .map(|i| format!("android:{}-{}", i.api, i.flavour))
+                .map(|i| {
+                    format!(
+                        "android:{}-{}",
+                        crate::sdk::version_label(i.api, i.minor),
+                        i.flavour
+                    )
+                })
                 .collect();
             push("system images", Level::Ok, list.join(", "), None);
         }
