@@ -904,3 +904,145 @@ fn pull_lists_what_exists_when_nothing_matches() {
         text(&out.stderr)
     );
 }
+
+#[test]
+fn versions_lists_published_and_installed_versions() {
+    let _guard = serial();
+    let f = Fake::new("versions", false);
+    write_exec(&f.sdk.join("cmdline-tools/latest/bin/android"), ANDROID_CLI);
+    let listing = repo_listing(&f);
+    let run = |args: &[&str]| {
+        f.cmd(args)
+            .env("FAKE_LIST_FILE", &listing)
+            .output()
+            .unwrap()
+    };
+
+    // Nothing installed yet: every release is "available", and the table is on stdout only.
+    let out = run(&["versions"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let table = text(&out.stdout);
+    assert!(table.starts_with("USE "), "{table}");
+    assert!(
+        table.contains("android:38.1")
+            && table.contains("android:37.1")
+            && table.contains("android:37 "),
+        "{table}"
+    );
+    assert!(
+        !table.contains("beta") && !table.contains("CANARY") && !table.contains("37.2"),
+        "previews are hidden: {table}"
+    );
+    assert!(!table.contains("installed "), "{table}");
+    assert!(
+        text(&out.stderr).contains("Reading Google's SDK repository"),
+        "progress goes to stderr"
+    );
+    assert!(!table.contains("Reading Google"), "{table}");
+    let row37 = table
+        .lines()
+        .find(|l| l.starts_with("android:37 "))
+        .unwrap();
+    assert!(row37.contains("google_apis,"), "{row37}");
+
+    // After pulling, that release is marked installed, with the flavour starred.
+    assert_eq!(code(&run(&["pull", "android:37"])), 0);
+    let out = run(&["versions", "37"]);
+    let table = text(&out.stdout);
+    assert!(
+        table.lines().any(|l| l.starts_with("android:37 ")
+            && l.contains("installed")
+            && l.contains("google_apis*")),
+        "{table}"
+    );
+    assert!(
+        table
+            .lines()
+            .any(|l| l.starts_with("android:37.1") && l.contains("available")),
+        "{table}"
+    );
+    assert!(
+        !table.contains("android:38"),
+        "an API filter narrows the table: {table}"
+    );
+
+    // JSON: machine-readable, never styled, with the command to run.
+    let out = f
+        .cmd(&["versions", "--json"])
+        .env("FAKE_LIST_FILE", &listing)
+        .env("CLICOLOR_FORCE", "1")
+        .output()
+        .unwrap();
+    assert!(!text(&out.stdout).contains('\x1b'));
+    assert!(
+        !text(&out.stderr).contains("Reading Google"),
+        "no progress chatter in JSON mode"
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["repository_read"], true);
+    assert_eq!(v["abi"], host_abi());
+    let r37 = v["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["use"] == "android:37")
+        .unwrap();
+    assert_eq!(r37["installed"], true);
+    assert_eq!(r37["pull"], "dorker pull android:37");
+    assert!(
+        r37["flavours"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["name"] == "google_apis" && x["installed"] == true)
+    );
+}
+
+#[test]
+fn versions_still_works_when_the_repository_cannot_be_read() {
+    let _guard = serial();
+    let f = Fake::new("versions-offline", true); // the fake SDK has android-35 installed
+    // No FAKE_LIST_FILE: the stub's `sdk list` fails, like an offline machine.
+    write_exec(&f.sdk.join("cmdline-tools/latest/bin/android"), ANDROID_CLI);
+    let out = f.run(&["versions"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let table = text(&out.stdout);
+    assert!(
+        table
+            .lines()
+            .any(|l| l.starts_with("android:35") && l.contains("installed")),
+        "{table}"
+    );
+    assert!(table.contains("only installed images are shown"), "{table}");
+    let json: serde_json::Value =
+        serde_json::from_slice(&f.run(&["versions", "--json"]).stdout).unwrap();
+    assert_eq!(json["repository_read"], false);
+}
+
+#[test]
+fn pull_errors_point_at_dorker_versions() {
+    let _guard = serial();
+    let f = Fake::new("pull-hint-versions", false);
+    write_exec(&f.sdk.join("cmdline-tools/latest/bin/android"), ANDROID_CLI);
+    let listing = repo_listing(&f);
+    let out = f
+        .cmd(&["pull", "android:37-nonexistent"])
+        .env("FAKE_LIST_FILE", &listing)
+        .output()
+        .unwrap();
+    assert!(
+        text(&out.stderr).contains("dorker versions"),
+        "{}",
+        text(&out.stderr)
+    );
+    let out = f
+        .cmd(&["pull", "android:99"])
+        .env("FAKE_LIST_FILE", &listing)
+        .output()
+        .unwrap();
+    assert!(
+        text(&out.stderr).contains("dorker versions"),
+        "{}",
+        text(&out.stderr)
+    );
+}

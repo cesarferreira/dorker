@@ -412,6 +412,20 @@ fn doctor_colour_follows_the_conventions() {
 }
 
 #[test]
+fn versions_without_an_sdk_is_a_missing_dependency() {
+    let e = Env::new("versions-nosdk");
+    let o = e
+        .cmd(&["versions"])
+        .env("ANDROID_HOME", "/nonexistent")
+        .env("ANDROID_SDK_ROOT", "/nonexistent")
+        .env("HOME", "/nonexistent")
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 3, "{}", text(&o.stderr));
+    assert!(text(&o.stderr).contains("Android SDK not found"));
+}
+
+#[test]
 fn init_creates_a_parseable_dorkerfile_and_never_overwrites() {
     let e = Env::new("init");
     let dir = e.home.join("proj");

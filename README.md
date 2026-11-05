@@ -69,8 +69,9 @@ image (`dorker pull` installs one). macOS Apple Silicon and Linux x86_64 with KV
 validated. No Docker needed.
 
 ```bash
-# Check your setup, then install a system image if one is missing
+# Check your setup, see which Android versions you can use, install one
 dorker doctor
+dorker versions                      # installed and available to pull
 dorker pull android:35
 
 # Boot a headless emulator and use it
@@ -120,6 +121,9 @@ CMD launch com.example.app
 Then build the image once and run it as many times as you like:
 
 ```bash
+# Not sure which versions exist? List them (installed and available)
+dorker versions
+
 # Install the base image named by FROM, if it is missing
 dorker pull
 

@@ -590,27 +590,13 @@ enum Discovery {
 }
 
 fn discover_remote(sdk: &Sdk, installer: &crate::sdk::Installer, r: &ImageRef) -> Discovery {
-    let crate::sdk::Installer::AndroidCli(cli) = installer else {
-        return Discovery::Unknown;
-    };
-    let out = std::process::Command::new(cli)
-        .arg(format!("--sdk={}", sdk.root.display()))
-        .args([
-            "sdk",
-            "list",
-            "--all",
-            &format!("system-images/android-{}*", r.api),
-        ])
-        .stdin(std::process::Stdio::null())
-        .output();
-    let Ok(out) = out else {
-        return Discovery::Unknown;
-    };
-    let images = crate::sdk::parse_remote_images(&String::from_utf8_lossy(&out.stdout));
-    if !out.status.success() || images.is_empty() {
-        crate::log::vlog!("could not read the repository listing; guessing the package name");
+    if !matches!(installer, crate::sdk::Installer::AndroidCli(_)) {
         return Discovery::Unknown;
     }
+    let Some(images) = sdk.list_remote_images(&format!("system-images/android-{}*", r.api)) else {
+        crate::log::vlog!("could not read the repository listing; guessing the package name");
+        return Discovery::Unknown;
+    };
     match crate::sdk::choose_remote(&images, r, crate::sdk::host_abi()) {
         Ok(img) => Discovery::Chosen(img),
         Err(candidates) => Discovery::Unavailable(candidates),
@@ -622,7 +608,7 @@ fn unavailable_message(r: &ImageRef, candidates: &[crate::sdk::RemoteImage]) -> 
     let abi = crate::sdk::host_abi();
     if candidates.is_empty() {
         return format!(
-            "the SDK repository publishes no stable system image for {r} on {abi}\n\nSee what exists with: android sdk list --all system-images"
+            "the SDK repository publishes no stable system image for {r} on {abi}\n\nSee every version you can use: dorker versions"
         );
     }
     let mut msg = format!(
@@ -639,6 +625,7 @@ fn unavailable_message(r: &ImageRef, candidates: &[crate::sdk::RemoteImage]) -> 
             format!("\nTry: dorker pull {}", c.reference())
         });
     msg.push_str(&suggestion);
+    msg.push_str("\nSee every version you can use: dorker versions");
     msg
 }
 

@@ -86,6 +86,21 @@ impl Sdk {
         self.cmdline_tool("android")
     }
 
+    /// The stable system images Google publishes matching `pattern` (e.g. `system-images/*`),
+    /// read with `android sdk list --all`. `None` when the listing cannot be read (no `android`
+    /// CLI, offline, or the command failed), so callers can fall back.
+    pub fn list_remote_images(&self, pattern: &str) -> Option<Vec<RemoteImage>> {
+        let cli = self.android_cli()?;
+        let out = std::process::Command::new(cli)
+            .arg(format!("--sdk={}", self.root.display()))
+            .args(["sdk", "list", "--all", pattern])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        let images = parse_remote_images(&String::from_utf8_lossy(&out.stdout));
+        (out.status.success() && !images.is_empty()).then_some(images)
+    }
+
     /// The best available tool for installing SDK packages: `android` when present, else
     /// the legacy `sdkmanager` (older command-line tools), else none.
     pub fn package_installer(&self) -> Option<Installer> {

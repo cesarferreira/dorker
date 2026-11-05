@@ -15,6 +15,7 @@ mod testcmd;
 #[cfg(test)]
 mod testutil;
 mod units;
+mod versions;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -67,6 +68,16 @@ enum Command {
     },
     /// Remove an image
     Rmi { image: String },
+    /// List the Android versions you can use (installed, and available to pull)
+    Versions {
+        /// Only this API level, e.g. 37
+        api: Option<u32>,
+        /// Include Wear, TV, tablet and other non-phone flavours
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Install a system image, e.g. `dorker pull android:35`
     Pull {
         /// Image to install; omit to install the `FROM` image of ./Dorkerfile
@@ -293,6 +304,7 @@ fn run(cli: Cli) -> Result<i32> {
             timeout,
             no_cache,
         }),
+        Command::Versions { api, all, json } => versions::run(api, all, json),
         Command::Pull { image, file } => commands::pull(image.as_deref(), file.as_deref()),
         Command::Init => commands::init(),
         Command::Mcp => mcp::serve(),
