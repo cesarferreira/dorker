@@ -354,6 +354,8 @@ fn doctor_colour_follows_the_conventions() {
             .env_remove("CLICOLOR_FORCE")
             .env_remove("CLICOLOR")
             .env("ANDROID_HOME", "/nonexistent")
+            // CI runners also set ANDROID_SDK_ROOT, which dorker honours.
+            .env("ANDROID_SDK_ROOT", "/nonexistent")
             .env("HOME", "/nonexistent");
         for (k, v) in vars {
             c.env(k, v);
