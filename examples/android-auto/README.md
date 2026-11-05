@@ -26,7 +26,7 @@ instance as an image:
 
 ```bash
 dorker run -d --name setup          # builds the Dorkerfile here, then runs it
-./enable-dev-mode.sh setup          # developer mode on, head unit server started
+./enable-dev-mode.sh setup          # developer mode on, server started
 dorker commit setup -t gearhead:ready
 dorker run -d --name auto gearhead:ready   # starts with the server listening
 aa session start                    # an openDHU session against it
