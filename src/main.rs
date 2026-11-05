@@ -10,6 +10,7 @@ mod mcp;
 mod runtime;
 mod sdk;
 mod store;
+mod style;
 mod testcmd;
 #[cfg(test)]
 mod testutil;

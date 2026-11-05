@@ -345,6 +345,71 @@ fn pull_without_an_image_reads_the_dorkerfile() {
 }
 
 #[test]
+fn doctor_colour_follows_the_conventions() {
+    let e = Env::new("colour");
+    // No SDK is needed: doctor reports what it finds (FAIL lines are fine for these checks).
+    let doctor = |args: &[&str], vars: &[(&str, &str)]| {
+        let mut c = e.cmd(args);
+        c.env_remove("NO_COLOR")
+            .env_remove("CLICOLOR_FORCE")
+            .env_remove("CLICOLOR")
+            .env("ANDROID_HOME", "/nonexistent")
+            .env("HOME", "/nonexistent");
+        for (k, v) in vars {
+            c.env(k, v);
+        }
+        c.output().unwrap()
+    };
+    let esc = |o: &Output| text(&o.stdout).contains('\x1b');
+
+    // Piped (as here): plain text, so logs and scripts stay clean.
+    let piped = doctor(&["doctor"], &[]);
+    assert!(!esc(&piped), "{}", text(&piped.stdout));
+    assert!(
+        text(&piped.stdout).contains("[FAIL] android sdk"),
+        "{}",
+        text(&piped.stdout)
+    );
+
+    // Forced on: the failing check is bold red and the verdict line is styled.
+    let forced = doctor(&["doctor"], &[("CLICOLOR_FORCE", "1")]);
+    assert!(esc(&forced));
+    assert!(
+        text(&forced.stdout).contains("\x1b[1;31mFAIL\x1b[0m"),
+        "{}",
+        text(&forced.stdout)
+    );
+    // Colour is cosmetic: the exit code is the same, and the text matches once escapes are removed.
+    assert_eq!(code(&forced), code(&piped));
+    let stripped: String = {
+        let mut out = String::new();
+        let mut chars = text(&forced.stdout).chars().collect::<Vec<_>>().into_iter();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                for n in chars.by_ref() {
+                    if n.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    };
+    assert_eq!(stripped, text(&piped.stdout));
+
+    // NO_COLOR wins even over CLICOLOR_FORCE.
+    let no = doctor(&["doctor"], &[("CLICOLOR_FORCE", "1"), ("NO_COLOR", "1")]);
+    assert!(!esc(&no));
+
+    // JSON is never styled, even when colour is forced.
+    let json = doctor(&["doctor", "--json"], &[("CLICOLOR_FORCE", "1")]);
+    assert!(!esc(&json));
+    assert!(serde_json::from_slice::<serde_json::Value>(&json.stdout).is_ok());
+}
+
+#[test]
 fn init_creates_a_parseable_dorkerfile_and_never_overwrites() {
     let e = Env::new("init");
     let dir = e.home.join("proj");

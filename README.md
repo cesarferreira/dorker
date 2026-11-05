@@ -208,6 +208,10 @@ operations are available to scripts as `--json` on `run`, `start`, `exec`, `inst
 
 ### Diagnostics
 
+`dorker doctor` colours its report on a terminal (green ok, yellow warn, bold red FAIL, fixes
+in cyan). Colour is off when piped, `NO_COLOR` turns it off, `CLICOLOR_FORCE=1` forces it on,
+and `--json` is never coloured.
+
 `dorker -v <command>` (or `DORKER_VERBOSE=1`) prints what dorker decides and runs to stderr: the
 located SDK, the boot mode and why, the exact emulator command line and environment, state
 transitions and timings. Each instance also keeps its raw emulator output in

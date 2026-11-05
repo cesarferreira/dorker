@@ -1,5 +1,6 @@
 use crate::sdk::{Sdk, host_abi};
 use crate::store::Store;
+use crate::style::Style;
 use anyhow::Result;
 use std::process::Command;
 
@@ -192,6 +193,36 @@ fn collect() -> Vec<Check> {
     v
 }
 
+/// The human-readable report. Padding is applied before colouring, so styled and plain output
+/// have identical columns (tests strip the escapes and compare).
+fn render(checks: &[Check], failed: bool, st: &Style) -> String {
+    let mut out = String::new();
+    for c in checks {
+        let mark = match c.level {
+            Level::Ok => st.green("ok  "),
+            Level::Warn => st.yellow("warn"),
+            Level::Fail => st.red_bold("FAIL"),
+        };
+        let name = st.bold(&format!("{:<14}", c.name));
+        let detail = match c.level {
+            Level::Ok => c.detail.clone(),
+            Level::Warn => st.yellow(&c.detail),
+            Level::Fail => st.red_bold(&c.detail),
+        };
+        out.push_str(&format!("[{mark}] {name} {detail}\n"));
+        if let (Some(fix), true) = (&c.fix, c.level != Level::Ok) {
+            out.push_str(&format!("       {} {}\n", st.dim("fix:"), st.cyan(fix)));
+        }
+    }
+    let verdict = if failed {
+        st.red_bold("Some checks failed.")
+    } else {
+        st.green_bold("All required checks passed.")
+    };
+    out.push_str(&format!("\n{verdict}\n"));
+    out
+}
+
 pub fn run(json: bool) -> Result<i32> {
     let checks = collect();
     let failed = checks.iter().any(|c| c.level == Level::Fail);
@@ -211,25 +242,65 @@ pub fn run(json: bool) -> Result<i32> {
             serde_json::to_string_pretty(&serde_json::json!({ "ok": !failed, "checks": rows }))?
         );
     } else {
-        for c in &checks {
-            let mark = match c.level {
-                Level::Ok => "ok  ",
-                Level::Warn => "warn",
-                Level::Fail => "FAIL",
-            };
-            println!("[{mark}] {:<14} {}", c.name, c.detail);
-            if let (Some(fix), true) = (&c.fix, c.level != Level::Ok) {
-                println!("       fix: {fix}");
-            }
-        }
-        println!(
-            "\n{}",
-            if failed {
-                "Some checks failed."
-            } else {
-                "All required checks passed."
-            }
-        );
+        print!("{}", render(&checks, failed, &Style::stdout()));
     }
     Ok(if failed { crate::errors::DEPENDENCY } else { 0 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::strip_ansi;
+
+    fn sample() -> Vec<Check> {
+        vec![
+            Check {
+                name: "platform",
+                level: Level::Ok,
+                detail: "macos 26 aarch64".into(),
+                fix: None,
+            },
+            Check {
+                name: "disk space",
+                level: Level::Warn,
+                detail: "3 GB free".into(),
+                fix: Some("free up space".into()),
+            },
+            Check {
+                name: "emulator",
+                level: Level::Fail,
+                detail: "not found".into(),
+                fix: Some("android sdk install emulator".into()),
+            },
+        ]
+    }
+
+    #[test]
+    fn plain_output_is_unchanged_and_has_no_escapes() {
+        let plain = render(&sample(), true, &Style { on: false });
+        assert!(!plain.contains('\x1b'));
+        assert_eq!(
+            plain,
+            "[ok  ] platform       macos 26 aarch64\n\
+             [warn] disk space     3 GB free\n       fix: free up space\n\
+             [FAIL] emulator       not found\n       fix: android sdk install emulator\n\
+             \nSome checks failed.\n"
+        );
+    }
+
+    #[test]
+    fn colour_adds_escapes_without_changing_the_text_or_columns() {
+        let plain = render(&sample(), true, &Style { on: false });
+        let styled = render(&sample(), true, &Style { on: true });
+        assert!(styled.contains("\x1b[32mok  \x1b[0m"), "ok is green");
+        assert!(styled.contains("\x1b[33mwarn\x1b[0m"), "warn is yellow");
+        assert!(styled.contains("\x1b[1;31mFAIL\x1b[0m"), "FAIL is bold red");
+        assert_eq!(
+            strip_ansi(&styled),
+            plain,
+            "same text and alignment once the colour is removed"
+        );
+        let ok = render(&sample()[..1], false, &Style { on: true });
+        assert!(ok.contains("\x1b[1;32mAll required checks passed.\x1b[0m"));
+    }
 }
