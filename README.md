@@ -173,7 +173,7 @@ dorker rm -f b1
 `INSTALL` takes an `.apk` or an `.xapk` bundle (split APKs and OBB files), and
 `FROM android:35-playstore` picks the Google Play Store image. Every directive is
 documented in [docs/dorkerfile.md](docs/dorkerfile.md). More examples:
-[examples/basic](examples/basic), [examples/instrumentation](examples/instrumentation) and
+[examples/basic](examples/basic), [examples/instrumentation](examples/instrumentation), [examples/android-auto](examples/android-auto) (an `.xapk` downloaded with apkeep) and
 [examples/counter-app](examples/counter-app), a real Gradle app with Espresso tests
 (`./dev.sh` runs Gradle, `dorker build`, `run`, a screenshot and the tests). The example APKs
 are not committed: build them with each example's `make-apk.sh` (or Gradle for the counter app).
