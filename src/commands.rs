@@ -24,6 +24,8 @@ pub struct RunArgs {
     pub json: bool,
     /// Install a missing system image without asking (`--pull`).
     pub pull: bool,
+    /// Stream the device's logcat while attached (`--logs`; foreground runs only).
+    pub logs: bool,
 }
 
 /// An instance as machine-readable JSON, for `run --json`, `start --json` and the MCP server.
@@ -483,8 +485,26 @@ pub fn run(a: RunArgs) -> Result<i32> {
 
     // Foreground: stay attached until the emulator exits or we are interrupted.
     eprintln!("Attached. Press Ctrl-C to stop {}.", inst.name);
+    // `adb logcat` follows the device until we kill it below.
+    let mut logcat = if a.logs {
+        eprintln!("Streaming device log (logcat):");
+        let mut cmd = runtime::adb(&sdk, &inst.serial());
+        // Start from the last few lines, not the whole boot history.
+        cmd.args(["logcat", "-T", "20"]);
+        cmd.spawn().ok()
+    } else {
+        eprintln!(
+            "See the device: `dorker screenshot {0} shot.png`, `dorker logs -f {0}`, or run with --logs.",
+            inst.name
+        );
+        None
+    };
     while !runtime::interrupted() && runtime::is_our_process(&inst) {
         std::thread::sleep(Duration::from_millis(500));
+    }
+    if let Some(child) = logcat.as_mut() {
+        let _ = child.kill();
+        let _ = child.wait();
     }
     let _op = store.lock_instance(&inst.id, OP_TIMEOUT)?;
     inst = store.find(&inst.id)?;

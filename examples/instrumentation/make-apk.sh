@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds app.apk (code-free target app) and test.apk (instrumentation) with the Android SDK build-tools and a JDK.
+# Builds app.apk (target app with one launcher activity) and test.apk (instrumentation) with the Android SDK build-tools and a JDK.
 set -euo pipefail
 cd "$(dirname "$0")"
 SDK="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
@@ -13,7 +13,12 @@ sign() { "$BT/zipalign" -f 4 "$1" "$W/aligned.apk"
   "$BT/apksigner" sign --ks "$KS" --ks-pass pass:android --key-pass pass:android --ks-key-alias dorker --out "$2" "$W/aligned.apk"
   rm -f "$2.idsig"; }
 
+mkdir -p "$W/app-classes"
+javac --release 8 -Xlint:-options -cp "$JAR" -d "$W/app-classes" src/com/dorker/sample/MainActivity.java
+mkdir -p "$W/app-dex"
+"$BT/d8" --lib "$JAR" --output "$W/app-dex" $(find "$W/app-classes" -name '*.class')
 "$BT/aapt2" link --manifest AppManifest.xml -I "$JAR" -o "$W/app.apk"
+(cd "$W/app-dex" && zip -q -j "$W/app.apk" classes.dex)
 sign "$W/app.apk" app.apk
 
 mkdir -p "$W/classes"

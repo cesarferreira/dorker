@@ -103,6 +103,20 @@ available as an opt-in per Dorkerfile; `host` needs a real GPU and display, and
 `angle_indirect` may help cold-boot-heavy or memory-constrained Linux setups. The GPU
 mode is part of the snapshot's hardware identity, so it is part of the image fingerprint.
 
+### Interactive use: UI smoothness (macOS)
+
+Restore time is not the whole story when someone is *watching* the device (for example
+with scrcpy). Scrolling Settings on two images that differ only in `GPU`, M4 Pro, API 35:
+
+| Mode | Host CPU while scrolling | Guest frame time (median / 90th) |
+|---|---|---|
+| `swiftshader_indirect` (default) | about 600 % (six cores) | 23 / 24 ms |
+| `host` | about 43 % | 19 / 23 ms |
+
+Single measurement each, so treat the ratio as indicative. For a Mac that you interact
+with, `GPU host` in the Dorkerfile makes the emulator far lighter; the default stays
+`swiftshader_indirect` because it works on every host, including headless CI.
+
 ## Linux x86_64 (KVM)
 
 Same command (`dorker bench sample --runs 3 --apk examples/instrumentation/test.apk`) on

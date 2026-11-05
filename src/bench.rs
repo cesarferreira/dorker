@@ -348,6 +348,7 @@ pub fn run(a: BenchArgs) -> Result<i32> {
         gpu: a.gpu.clone(),
         json: false,
         pull: a.pull,
+        logs: false,
     };
     let mut cold = Vec::new();
     let mut restore = Vec::new();

@@ -210,6 +210,9 @@ enum Command {
         /// `android` CLI accepts the SDK licences for you when it installs.
         #[arg(long)]
         pull: bool,
+        /// Stream the device's log (logcat) while attached
+        #[arg(long)]
+        logs: bool,
     },
     /// List instances
     Ps {
@@ -326,6 +329,7 @@ fn run(cli: Cli) -> Result<i32> {
             gpu,
             json,
             pull,
+            logs,
         } => {
             let image = commands::run_target(image, file.as_deref(), timeout, pull)?;
             commands::run(commands::RunArgs {
@@ -340,6 +344,7 @@ fn run(cli: Cli) -> Result<i32> {
                 gpu,
                 json,
                 pull,
+                logs,
             })
         }
         Command::Build {

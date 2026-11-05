@@ -133,7 +133,12 @@ dorker rm -f t1
 
 # Or in the foreground; the instance is removed on Ctrl-C
 dorker run --rm
+dorker run --logs                    # also stream the device log (logcat)
 ```
+
+If you will watch the screen (scrcpy, for example), add `GPU host` to the Dorkerfile on a
+Mac. The default software renderer used about 600 % CPU while scrolling in our test and
+`host` about 43 %; see [docs/benchmarks.md](docs/benchmarks.md).
 
 `dorker run` with no image always starts what the Dorkerfile *currently* says: it builds
 first, which is a cache hit when nothing changed, so edit the file and run again to get
