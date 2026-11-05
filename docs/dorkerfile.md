@@ -34,7 +34,7 @@ CMD launch com.example.application
 | `DEVICE` | profile name | Written to the AVD (`hw.device.name`). Default `pixel_7` |
 | `RESOLUTION` | `WxH` | Default `1080x2400` |
 | `HEADLESS` | `true`/`false` | Default `true`. `false` opens the emulator's window (uses the windowed QEMU binary and `-gpu auto`). Verified on macOS: snapshot restore, `exec` and `screenshot` all work with the window open |
-| `GPU` | `swiftshader_indirect`, `angle_indirect`, `guest`, `host`, `off`, `auto` | Emulator graphics mode. Default `swiftshader_indirect` (works everywhere); `auto` when `HEADLESS false`. `host` needs a real GPU and display (fails on headless Linux VMs). Part of the snapshot identity, so it changes the image id. `dorker run --gpu` exists for base `android:<api>` runs only |
+| `GPU` | `swiftshader_indirect`, `angle_indirect`, `guest`, `host`, `off`, `auto` | Emulator graphics mode. Default `host` on macOS (the Mac GPU: about 14x less CPU than software rendering while the screen is in use) and `swiftshader_indirect` elsewhere (works on GPU-less hosts and CI); `auto` when `HEADLESS false`. `host` needs a real GPU and display (fails on headless Linux VMs). Part of the snapshot identity, so it changes the image id. `dorker run --gpu` exists for base `android:<api>` runs only |
 | `INSTALL` | path | Repeatable. Relative to the build context; paths that escape it (`..`, symlinks) are rejected |
 | `SETTING` | `[global\|secure\|system] key value` | Repeatable. Namespace defaults to `global`. Only `[A-Za-z0-9_.:-]` is accepted |
 | `SNAPSHOT` | name | Save an emulator snapshot after provisioning. Instances restore it in a few seconds |

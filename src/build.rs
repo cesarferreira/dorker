@@ -605,7 +605,7 @@ mod tests {
         // The GPU mode is part of the snapshot's hardware identity, so it must bust the cache.
         let gpu = dorkerfile::parse(
             "D",
-            "FROM android:35\nSETTING a 1\nSNAPSHOT ready\nGPU host\n",
+            "FROM android:35\nSETTING a 1\nSNAPSHOT ready\nGPU guest\n",
         )
         .unwrap();
         assert_ne!(base, fingerprint(&inputs(&gpu, &a, "9", "1.0")), "gpu mode");

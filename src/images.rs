@@ -330,9 +330,16 @@ mod tests {
     #[test]
     fn private_usage_of_a_plain_directory_matches_its_files() {
         let d = Dir::new();
-        fs::write(d.path().join("a"), vec![7u8; 300_000]).unwrap();
+        // Sync each file: APFS may report a freshly written file's private size as 0
+        // until its blocks are allocated.
+        let write = |path: std::path::PathBuf, byte: u8, len: usize| {
+            let f = fs::File::create(path).unwrap();
+            std::io::Write::write_all(&mut &f, &vec![byte; len]).unwrap();
+            f.sync_all().unwrap();
+        };
+        write(d.path().join("a"), 7, 300_000);
         fs::create_dir_all(d.path().join("sub")).unwrap();
-        fs::write(d.path().join("sub/b"), vec![9u8; 200_000]).unwrap();
+        write(d.path().join("sub/b"), 9, 200_000);
         let private = dir_private_usage(d.path());
         assert!(private >= 500_000, "{private}");
         // Nothing is shared, so it is about the allocated size. (Not exactly: a file

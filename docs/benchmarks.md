@@ -113,9 +113,16 @@ with scrcpy). Scrolling Settings on two images that differ only in `GPU`, M4 Pro
 | `swiftshader_indirect` (default) | about 600 % (six cores) | 23 / 24 ms |
 | `host` | about 43 % | 19 / 23 ms |
 
-Single measurement each, so treat the ratio as indicative. For a Mac that you interact
-with, `GPU host` in the Dorkerfile makes the emulator far lighter; the default stays
-`swiftshader_indirect` because it works on every host, including headless CI.
+On the Linux VM (8 vCPU Azure, no GPU, `hyperv_drm`) the same scrolling test gave
+`swiftshader_indirect` about 650 % and `angle_indirect` about 610 % host CPU (and 0.3 GB
+less memory), so both are CPU-bound there. `host` fails to start the renderer, and `auto`
+on a GPU-less host booted in 68 s (against about 29 s) and gave a near-blank first
+screenshot, so Linux keeps `swiftshader_indirect`. A Linux machine with a real GPU can
+opt in with `GPU host`.
+
+Single measurement each, so treat the ratio as indicative. Because of this, macOS now
+defaults to `host`; other platforms keep `swiftshader_indirect`, which works on GPU-less
+hosts such as headless CI. Restore is about 0.4 s slower with `host` (table above).
 
 ## Linux x86_64 (KVM)
 

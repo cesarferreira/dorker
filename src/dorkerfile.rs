@@ -19,7 +19,7 @@ const DIRECTIVES: [&str; 12] = [
 ];
 
 /// Emulator `-gpu` modes dorker accepts. `host` needs a GPU/display (fails on headless
-/// Linux VMs); `swiftshader_indirect` works everywhere and is the headless default.
+/// Linux VMs); `swiftshader_indirect` works everywhere and is the headless default off macOS.
 pub const GPU_MODES: [&str; 6] = [
     "auto",
     "swiftshader_indirect",
@@ -69,11 +69,17 @@ impl Dorkerfile {
     }
 }
 
+/// The GPU mode used when none is chosen. A Mac always has a GPU, and rendering on it
+/// uses far less CPU than software rendering (about 43% vs 600% while scrolling in our
+/// measurements), so macOS defaults to `host` even when headless. Elsewhere a headless
+/// machine may have no GPU or display (CI, VMs), so `swiftshader_indirect` is the default.
 pub fn default_gpu(headless: bool) -> &'static str {
-    if headless {
-        "swiftshader_indirect"
-    } else {
+    if !headless {
         "auto"
+    } else if cfg!(target_os = "macos") {
+        "host"
+    } else {
+        "swiftshader_indirect"
     }
 }
 
@@ -516,7 +522,11 @@ mod tests {
         assert_eq!(d.gpu_mode(), "host");
         assert_eq!(
             p("FROM android:35\n").unwrap().gpu_mode(),
-            "swiftshader_indirect"
+            if cfg!(target_os = "macos") {
+                "host"
+            } else {
+                "swiftshader_indirect"
+            }
         );
         assert_eq!(
             p("FROM android:35\nHEADLESS false\n").unwrap().gpu_mode(),

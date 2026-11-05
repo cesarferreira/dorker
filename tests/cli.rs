@@ -583,10 +583,11 @@ fn end_to_end_build_run_exec_screenshot_test_cleanup() {
     );
     // Regression: right after a cold boot READY can arrive before the launcher has drawn, and a
     // screenshot taken at once used to be a blank frame (~15 KB). It now waits for content.
+    // The sample app (launched by `CMD`) is a flat screen of about 34 KB, a busy launcher is far larger.
     let first_shot = e.run(&["screenshot", "cold", "-"]);
     assert_eq!(code(&first_shot), 0, "{}", text(&first_shot.stderr));
     assert!(
-        first_shot.stdout.len() > 200_000,
+        first_shot.stdout.len() > 25_000,
         "screenshot right after a cold boot must not be blank ({} bytes)",
         first_shot.stdout.len()
     );

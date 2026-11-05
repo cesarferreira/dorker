@@ -136,9 +136,9 @@ dorker run --rm
 dorker run --logs                    # also stream the device log (logcat)
 ```
 
-If you will watch the screen (scrcpy, for example), add `GPU host` to the Dorkerfile on a
-Mac. The default software renderer used about 600 % CPU while scrolling in our test and
-`host` about 43 %; see [docs/benchmarks.md](docs/benchmarks.md).
+On a Mac the emulator renders on the GPU by default (`GPU host`), which keeps it smooth
+when you watch the screen with scrcpy: about 43 % CPU while scrolling against about 600 %
+for software rendering. See [docs/benchmarks.md](docs/benchmarks.md).
 
 `dorker run` with no image always starts what the Dorkerfile *currently* says: it builds
 first, which is a cache hit when nothing changed, so edit the file and run again to get
@@ -293,7 +293,7 @@ See [docs/architecture.md](docs/architecture.md) for design and limitations.
 - **Snapshots are strict.** A change of emulator version, system-image revision, memory or CPUs invalidates an image's snapshot. dorker then cold boots (about 15s) and says so. Snapshots are host-specific and not portable between machines.
 - **Memory:** a 2GB guest used about 2.5GB of host memory after a cold boot and 3.3GB after a snapshot restore on macOS (3-3.7GB on Linux). Idle CPU is dominated by Android background work and takes about a minute to settle.
 - **Builds take about 45s** because dorker reboots the guest to persist provisioned state.
-- **`CMD`** only supports `launch <package>`. `dorker start` always cold boots (about 14s) because restoring the image snapshot would roll back the instance's data. There is software rendering (`swiftshader_indirect`) is the default; `GPU <mode>` in the Dorkerfile selects another, but none was faster for snapshot restore in our measurements (see docs/benchmarks.md) and no automatic test-APK discovery.
+- **`CMD`** only supports `launch <package>`. `dorker start` always cold boots (about 14s) because restoring the image snapshot would roll back the instance's data. Rendering uses the Mac GPU (`host`) on macOS and software rendering (`swiftshader_indirect`) elsewhere; `GPU <mode>` in the Dorkerfile selects another. No mode was faster for snapshot restore in our measurements (see docs/benchmarks.md). There is no automatic test-APK discovery.
 - **Concurrency:** creating instances concurrently is safe, and `stop`, `rm` and `start` on the same instance are serialised by a per-instance lock (the second command waits up to 60s, then exits 8).
 - **Orphans:** emulator processes that dorker started but lost track of (CLI killed mid-start) are reported by `dorker ps`, not adopted or killed automatically.
 - `examples/basic` and `examples/instrumentation` use tiny hand-built APKs; `examples/counter-app` is the realistic one.

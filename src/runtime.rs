@@ -34,11 +34,7 @@ pub const LAST_PORT: u16 = 5680;
 pub fn render_avd_config(inst: &Instance, image: &SystemImage) -> String {
     let (w, h) = (inst.width, inst.height);
     let density = 420;
-    let gpu_mode = if inst.headless {
-        "swiftshader_indirect"
-    } else {
-        "auto"
-    };
+    let gpu_mode = inst.gpu.as_str();
     let lines = [
         format!("AvdId={AVD_NAME}"),
         format!("avd.ini.displayname={AVD_NAME}"),
