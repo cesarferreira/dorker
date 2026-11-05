@@ -572,9 +572,13 @@ pub fn images(json: bool) -> Result<i32> {
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(0);
     }
+    let st = crate::style::Style::stdout();
     println!(
-        "{:<22}{:<12}{:<14}{:<9}{:<10}SIZE (disk / logical)",
-        "REPOSITORY", "TAG", "IMAGE ID", "ANDROID", "SNAPSHOT"
+        "{}",
+        st.dim(&format!(
+            "{:<22}{:<12}{:<14}{:<9}{:<10}SIZE (disk / logical)",
+            "REPOSITORY", "TAG", "IMAGE ID", "ANDROID", "SNAPSHOT"
+        ))
     );
     for m in &list {
         let (logical, allocated) = images::dir_usage(&images::image_dir(&store, &m.id));
@@ -593,9 +597,24 @@ pub fn images(json: bool) -> Result<i32> {
                 .collect()
         };
         for (repo, tag) in tags {
+            let untagged = repo == "<none>";
+            let (repo, tag) = (format!("{repo:<22}"), format!("{tag:<12}"));
+            let (repo, tag) = if untagged {
+                (st.dim(&repo), st.dim(&tag))
+            } else {
+                (st.green_bold(&repo), st.green(&tag))
+            };
+            let snap = format!("{snap:<10}");
+            let snap = if m.snapshot.is_some() {
+                st.green(&snap)
+            } else {
+                st.dim(&snap)
+            };
             println!(
-                "{:<22}{:<12}{:<14}{:<9}{:<10}{}",
-                repo, tag, m.id, m.api, snap, size
+                "{repo}{tag}{}{:<9}{snap}{}",
+                st.cyan(&format!("{:<14}", m.id)),
+                m.api,
+                st.yellow(&size)
             );
         }
     }
@@ -947,9 +966,13 @@ pub fn ps(all: bool, json: bool) -> Result<i32> {
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(0);
     }
+    let st = crate::style::Style::stdout();
     println!(
-        "{:<14}{:<20}{:<22}{:<10}ADB",
-        "ID", "NAME", "IMAGE", "STATUS"
+        "{}",
+        st.dim(&format!(
+            "{:<14}{:<20}{:<22}{:<10}ADB",
+            "ID", "NAME", "IMAGE", "STATUS"
+        ))
     );
     for i in &list {
         let adb = if i.state.expects_process() {
@@ -958,11 +981,11 @@ pub fn ps(all: bool, json: bool) -> Result<i32> {
             "-".into()
         };
         println!(
-            "{:<14}{:<20}{:<22}{:<10}{}",
-            &i.id[..12.min(i.id.len())],
-            i.name,
+            "{}{}{:<22}{}{}",
+            st.cyan(&format!("{:<14}", &i.id[..12.min(i.id.len())])),
+            st.bold(&format!("{:<20}", i.name)),
             i.image,
-            i.state.as_str(),
+            st.status(i.state.as_str(), &format!("{:<10}", i.state.as_str())),
             adb
         );
     }

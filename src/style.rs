@@ -63,6 +63,16 @@ impl Style {
     pub fn dim(&self, s: &str) -> String {
         self.paint("2", s)
     }
+    /// Colour an instance status (`READY` green, failures red, idle dim, in-between yellow).
+    /// `text` may be padded; `status` picks the colour.
+    pub fn status(&self, status: &str, text: &str) -> String {
+        match status {
+            "READY" => self.green_bold(text),
+            "FAILED" | "CRASHED" => self.red_bold(text),
+            "STOPPED" | "CREATED" => self.dim(text),
+            _ => self.yellow(text),
+        }
+    }
 }
 
 /// Remove ANSI escape sequences (used by tests to compare styled output with plain output).

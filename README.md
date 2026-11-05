@@ -254,8 +254,8 @@ operations are available to scripts as `--json` on `run`, `start`, `exec`, `inst
 
 ### Diagnostics
 
-`dorker doctor` colours its report on a terminal (green ok, yellow warn, bold red FAIL, fixes
-in cyan). Colour is off when piped, `NO_COLOR` turns it off, `CLICOLOR_FORCE=1` forces it on,
+`doctor`, `ls`, `ps`, `images`, `versions` and `prune` colour their output on a terminal
+(green ok, yellow warn, bold red FAIL, fixes and IDs in cyan, sizes in yellow). Colour is off when piped, `NO_COLOR` turns it off, `CLICOLOR_FORCE=1` forces it on,
 and `--json` is never coloured.
 
 `dorker -v <command>` (or `DORKER_VERBOSE=1`) prints what dorker decides and runs to stderr: the

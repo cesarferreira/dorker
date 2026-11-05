@@ -134,31 +134,51 @@ pub fn render(r: &Report, now: u64, st: &Style) -> String {
     if r.images.is_empty() {
         out.push_str("  (none yet: `dorker build` or `dorker run` in a folder with a Dorkerfile creates one)\n");
     } else {
-        out.push_str(&format!(
-            "{:<14}{:<26}{:<9}{:<10}{:<10}{:<14}USED BY\n",
+        out.push_str(&st.dim(&format!(
+            "{:<14}{:<26}{:<9}{:<10}{:<10}{:<14}USED BY",
             "IMAGE ID", "TAGS", "ANDROID", "SNAPSHOT", "SIZE", "LAST USED"
-        ));
+        )));
+        out.push('\n');
         for l in &r.images {
             let tags = if l.meta.tags.is_empty() {
                 "<none>".to_string()
             } else {
                 l.meta.tags.join(",")
             };
+            let untagged = l.meta.tags.is_empty();
             let tags = if tags.chars().count() > 24 {
                 format!("{}...", tags.chars().take(21).collect::<String>())
             } else {
                 tags
             };
+            let tags = format!("{tags:<26}");
+            let tags = if untagged {
+                st.dim(&tags)
+            } else {
+                st.green_bold(&tags)
+            };
+            let snap = format!("{:<10}", l.meta.snapshot.as_deref().unwrap_or("-"));
+            let snap = if l.meta.snapshot.is_some() {
+                st.green(&snap)
+            } else {
+                st.dim(&snap)
+            };
+            let size = st.yellow(&format!("{:<10}", human(l.bytes)));
+            let used = if l.used_by == 0 {
+                st.dim(&used_by_text(l.used_by))
+            } else {
+                st.cyan(&used_by_text(l.used_by))
+            };
             let age = human_age(now.saturating_sub(l.meta.last_used_or_created()));
             out.push_str(&format!(
-                "{:<14}{:<26}{:<9}{:<10}{:<10}{:<14}{}\n",
-                l.meta.id,
+                "{}{}{:<9}{}{}{}{}\n",
+                st.cyan(&format!("{:<14}", l.meta.id)),
                 tags,
                 l.meta.api,
-                l.meta.snapshot.as_deref().unwrap_or("-"),
-                human(l.bytes),
-                age,
-                used_by_text(l.used_by)
+                snap,
+                size,
+                st.dim(&format!("{age:<14}")),
+                used
             ));
         }
     }
@@ -169,24 +189,21 @@ pub fn render(r: &Report, now: u64, st: &Style) -> String {
     if r.instances.is_empty() {
         out.push_str("  (none)\n");
     } else {
-        out.push_str(&format!(
-            "{:<14}{:<22}{:<16}{:<10}OWN SIZE\n",
+        out.push_str(&st.dim(&format!(
+            "{:<14}{:<22}{:<16}{:<10}OWN SIZE",
             "ID", "NAME", "IMAGE", "STATUS"
-        ));
+        )));
+        out.push('\n');
         for l in &r.instances {
             let status = format!("{:<10}", l.inst.state.as_str());
-            let status = match l.inst.state.as_str() {
-                "READY" => st.green(&status),
-                "FAILED" | "CRASHED" => st.red_bold(&status),
-                _ => status,
-            };
+            let status = st.status(l.inst.state.as_str(), &status);
             out.push_str(&format!(
-                "{:<14}{:<22}{:<16}{}{}\n",
-                l.inst.id,
-                l.inst.name,
+                "{}{}{:<16}{}{}\n",
+                st.cyan(&format!("{:<14}", l.inst.id)),
+                st.bold(&format!("{:<22}", l.inst.name)),
                 l.inst.image.chars().take(14).collect::<String>(),
                 status,
-                human(l.bytes)
+                st.yellow(&human(l.bytes))
             ));
         }
     }
@@ -196,60 +213,52 @@ pub fn render(r: &Report, now: u64, st: &Style) -> String {
     out.push('\n');
     let img = r.image_bytes();
     let inst = r.instance_bytes();
-    out.push_str(&format!(
-        "  {:<12}{:>3}   {:>8}",
-        "Images",
-        r.images.len(),
-        human(img)
-    ));
+    let row = |label: &str, count: String, bytes: u64| {
+        format!(
+            "  {}{:>3}   {}",
+            st.bold(&format!("{label:<12}")),
+            count,
+            st.yellow(&format!("{:>8}", human(bytes)))
+        )
+    };
+    out.push_str(&row("Images", r.images.len().to_string(), img));
     if r.reclaimable_images > 0 {
         out.push_str(&format!(
             "   {} unused, {} reclaimable with `dorker prune`",
             r.reclaimable_images,
-            human(r.reclaimable_bytes)
+            st.green_bold(&human(r.reclaimable_bytes))
         ));
     }
     out.push('\n');
-    out.push_str(&format!(
-        "  {:<12}{:>3}   {:>8}",
-        "Instances",
-        r.instances.len(),
-        human(inst)
-    ));
+    out.push_str(&row("Instances", r.instances.len().to_string(), inst));
     if !r.instances.is_empty() {
-        out.push_str(if images::CLONE_AWARE_SIZES {
+        out.push_str(&st.dim(if images::CLONE_AWARE_SIZES {
             "   only what they wrote; the rest is shared with their image"
         } else {
             "   full copies of their image (on btrfs/xfs they may share blocks, so this can overstate)"
-        });
+        }));
     }
     out.push('\n');
-    out.push_str(&format!(
-        "  {:<12}{:>3}   {:>8}   {}\n",
-        "Total",
-        "",
-        human(img + inst),
-        if images::CLONE_AWARE_SIZES {
-            "images + what instances wrote"
-        } else {
-            "images + instances"
-        }
-    ));
+    out.push_str(&row("Total", String::new(), img + inst));
+    out.push_str(&st.dim(if images::CLONE_AWARE_SIZES {
+        "   images + what instances wrote"
+    } else {
+        "   images + instances"
+    }));
+    out.push('\n');
     if let Some(free) = r.free_bytes {
-        out.push_str(&format!(
-            "  {:<12}{:>3}   {:>8}   free on this disk\n",
-            "Free",
-            "",
-            human(free)
-        ));
+        out.push_str(&row("Free", String::new(), free));
+        out.push_str(&st.dim("   free on this disk"));
+        out.push('\n');
     }
     if let Some(s) = &r.sdk {
-        out.push_str(&format!(
-            "\n  Android SDK system images (not managed by dorker): {}, {}   {}\n",
+        out.push_str(&st.dim(&format!(
+            "\n  Android SDK system images (not managed by dorker): {}, {}   {}",
             s.count,
             human(s.bytes),
             s.root.display()
-        ));
+        )));
+        out.push('\n');
     }
     if r.reclaimable_images > 0 {
         out.push('\n');
@@ -449,7 +458,7 @@ mod tests {
     fn colour_does_not_change_the_text_and_empty_states_are_helpful() {
         let plain = render(&sample(), NOW, &Style { on: false });
         let styled = render(&sample(), NOW, &Style { on: true });
-        assert!(styled.contains("\x1b[1mIMAGES\x1b[0m") && styled.contains("\x1b[32mREADY"));
+        assert!(styled.contains("\x1b[1mIMAGES\x1b[0m") && styled.contains("\x1b[1;32mREADY"));
         assert_eq!(strip_ansi(&styled), plain);
         let empty = Report {
             images: vec![],

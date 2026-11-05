@@ -326,14 +326,18 @@ fn print_plan(
     all: bool,
     with_instances: bool,
 ) {
+    let st = crate::style::Style::stdout();
     if nothing {
-        println!("Nothing to prune.");
+        println!("{}", st.green("Nothing to prune."));
     } else {
         if !images.is_empty() {
-            println!("Images to remove:");
+            println!("{}", st.bold("Images to remove:"));
             println!(
-                "  {:<14}{:<24}{:<9}{:<10}LAST USED",
-                "IMAGE ID", "TAGS", "ANDROID", "SIZE"
+                "{}",
+                st.dim(&format!(
+                    "  {:<14}{:<24}{:<9}{:<10}LAST USED",
+                    "IMAGE ID", "TAGS", "ANDROID", "SIZE"
+                ))
             );
             for r in images {
                 let tags = if r.meta.tags.is_empty() {
@@ -341,26 +345,38 @@ fn print_plan(
                 } else {
                     r.meta.tags.join(",")
                 };
+                let tags = format!("{tags:<24}");
+                let tags = if r.meta.tags.is_empty() {
+                    st.dim(&tags)
+                } else {
+                    st.green_bold(&tags)
+                };
                 println!(
-                    "  {:<14}{:<24}{:<9}{:<10}{}",
-                    r.meta.id,
+                    "  {}{}{:<9}{}{}",
+                    st.cyan(&format!("{:<14}", r.meta.id)),
                     tags,
                     r.meta.api,
-                    human(r.bytes),
-                    age_of(r.meta, now)
+                    st.yellow(&format!("{:<10}", human(r.bytes))),
+                    st.dim(&age_of(r.meta, now))
                 );
             }
         }
         if !instances.is_empty() {
-            println!("Instances to remove:");
-            println!("  {:<14}{:<24}{:<10}SIZE", "ID", "NAME", "STATUS");
+            println!("{}", st.bold("Instances to remove:"));
+            println!(
+                "{}",
+                st.dim(&format!("  {:<14}{:<24}{:<10}SIZE", "ID", "NAME", "STATUS"))
+            );
             for r in instances {
                 println!(
-                    "  {:<14}{:<24}{:<10}{}",
-                    r.inst.id,
-                    r.inst.name,
-                    r.inst.state.as_str(),
-                    human(r.bytes)
+                    "  {}{}{}{}",
+                    st.cyan(&format!("{:<14}", r.inst.id)),
+                    st.bold(&format!("{:<24}", r.inst.name)),
+                    st.status(
+                        r.inst.state.as_str(),
+                        &format!("{:<10}", r.inst.state.as_str())
+                    ),
+                    st.yellow(&human(r.bytes))
                 );
             }
         }
