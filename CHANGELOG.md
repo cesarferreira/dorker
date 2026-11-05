@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1] - 2026-11-05
+
+### 🚀 Features
+
+- Add --verbose diagnostics
+- Check free disk space up front and report why an image copy failed
+- Bench measures baselines, disk usage and app launch time
+
+### 📚 Documentation
+
+- Generate the changelog with git-cliff
 ## [0.1.0] - 2026-11-05
 
 ### 🚀 Features
