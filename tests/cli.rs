@@ -238,6 +238,20 @@ fn end_to_end_build_run_exec_screenshot_test_cleanup() {
     );
     assert!(adb_ok(&e, &["exec", "cold", "pm list packages"]).contains("com.dorker.sample"));
 
+    // A stopped instance can be restarted and keeps the data it wrote.
+    adb_ok(&e, &["exec", "cold", "echo kept > /data/local/tmp/marker"]);
+    adb_ok(&e, &["stop", "cold"]);
+    assert_eq!(
+        code(&e.run(&["start", "a"])),
+        8,
+        "starting a running instance is a conflict"
+    );
+    adb_ok(&e, &["start", "cold"]);
+    assert_eq!(
+        adb_ok(&e, &["exec", "cold", "cat /data/local/tmp/marker"]).trim(),
+        "kept"
+    );
+
     // Name collisions are a conflict.
     assert_eq!(code(&e.run(&["run", "-d", "--name", "a", "e2e:test"])), 8);
 

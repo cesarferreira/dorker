@@ -483,6 +483,23 @@ pub fn kill_instance(sdk: &Sdk, inst: &Instance, grace: Duration) {
     if !is_our_process(inst) {
         return;
     }
+    // Flush the guest's file system so an instance restarted later keeps its data.
+    if let Ok(mut c) = adb(sdk, &inst.serial())
+        .args(["shell", "sync"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_secs(5) {
+            if matches!(c.try_wait(), Ok(Some(_))) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _ = c.kill();
+        let _ = c.wait();
+    }
     let _ = adb(sdk, &inst.serial()).args(["emu", "kill"]).output();
     if wait_gone(inst, grace) {
         return;

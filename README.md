@@ -76,6 +76,7 @@ dorker install test ./app-debug.apk
 dorker screenshot test shot.png
 dorker logs test                                # add -f to follow
 dorker stop test
+dorker start test                               # cold boots again, keeps its data
 dorker rm test
 ```
 
@@ -147,8 +148,8 @@ See [docs/architecture.md](docs/architecture.md) for design and limitations.
 - **Snapshots are strict.** A change of emulator version, system-image revision, memory or CPUs invalidates an image's snapshot. dorker then cold boots (about 15s) and says so. Snapshots are host-specific and not portable between machines.
 - **Memory:** a 2GB guest used about 5.5GB of host RAM in our measurements.
 - **Builds take about 45s** because dorker reboots the guest to persist provisioned state.
-- **`CMD`** only supports `launch <package>`. There is no `dorker start` for stopped instances yet, no GPU-mode selection (software rendering is used when headless) and no automatic test-APK discovery.
-- **Concurrency:** creating instances concurrently is safe (a lock serialises name and port allocation), but there is no per-instance lock, so running `stop`, `rm -f` or a foreground `run` on the *same* instance at the same time is not serialised.
+- **`CMD`** only supports `launch <package>`. `dorker start` always cold boots (about 14s) because restoring the image snapshot would roll back the instance's data. There is no GPU-mode selection (software rendering is used when headless) and no automatic test-APK discovery.
+- **Concurrency:** creating instances concurrently is safe, and `stop`, `rm` and `start` on the same instance are serialised by a per-instance lock (the second command waits up to 60s, then exits 8).
 - **Orphans:** emulator processes that dorker started but lost track of (CLI killed mid-start) are reported by `dorker ps`, not adopted or killed automatically.
 - `examples/basic` and `examples/instrumentation` use tiny hand-built APKs; `examples/counter-app` is the realistic one.
 

@@ -8,7 +8,7 @@ itself. One crate, synchronous, no daemon.
 | Module | Responsibility |
 |---|---|
 | `main.rs` | clap CLI surface and dispatch |
-| `commands.rs` | `run`, `ps`, `exec`, `install`, `screenshot`, `logs`, `stop`, `rm`, `images`, `rmi`, `init` |
+| `commands.rs` | `run`, `start`, `ps`, `exec`, `install`, `screenshot`, `logs`, `stop`, `rm`, `images`, `rmi`, `init` |
 | `doctor.rs` | host checks with remediation (`--json`) |
 | `sdk.rs` | locate the SDK, list installed system images, resolve `android:<api>[-flavour]` |
 | `store.rs` | instance metadata, lifecycle states, create lock, ids |
@@ -57,8 +57,9 @@ itself. One crate, synchronous, no daemon.
     process group.
 11. **Crash and orphan handling.** A process-expecting record whose process is gone
     becomes `CRASHED`; a `CREATED` record older than 60 s becomes `FAILED`; emulator
-    processes with no record are reported by `dorker ps`. There is no per-instance
-    lock yet.
+    processes with no record are reported by `dorker ps`. Mutating commands (`stop`, `rm`,
+    `start`) take a per-instance lock (`op.lock`, holder pid inside, stale locks from dead
+    processes are broken); `stop` runs `sync` in the guest first so restarts keep data.
 12. **Atomic metadata.** `instance.json` is written to a temp file and renamed.
    A lock file serialises name and port allocation across concurrent runs.
 
@@ -88,5 +89,5 @@ Transitions are validated by `State::can_become`.
 
 ## Not implemented yet
 
-Automatic system-image download, restart of stopped instances, automatic test-APK
+Automatic system-image download, automatic test-APK
 discovery, GPU-mode benchmarking, Linux validation, release packaging (Phase 5).

@@ -139,6 +139,7 @@ pub struct Store {
     root: PathBuf,
 }
 
+#[derive(Debug)]
 pub struct LockGuard(PathBuf);
 
 impl Drop for LockGuard {
@@ -225,6 +226,48 @@ impl Store {
         Ok(())
     }
 
+    /// Serialise mutating operations (stop, rm, start) on one instance. The lock
+    /// file records the holder's pid, so a lock left by a dead process is broken.
+    pub fn lock_instance(&self, id: &str, timeout: std::time::Duration) -> Result<LockGuard> {
+        let path = self.instance_dir(id).join("op.lock");
+        let start = std::time::Instant::now();
+        loop {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut f) => {
+                    use std::io::Write;
+                    let _ = write!(f, "{}", std::process::id());
+                    return Ok(LockGuard(path));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let holder: Option<u32> = fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|s| s.trim().parse().ok());
+                    if holder.is_some_and(|p| !pid_alive(p)) {
+                        let _ = fs::remove_file(&path);
+                        continue;
+                    }
+                    if start.elapsed() > timeout {
+                        return Err(crate::errors::with(crate::errors::CONFLICT)(
+                            anyhow::anyhow!(
+                                "instance is busy (another dorker command, pid {}, is operating on it)",
+                                holder.map_or("?".into(), |p| p.to_string())
+                            ),
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    bail!("no such instance directory for {id}")
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
     /// Take the store-wide creation lock (name + port allocation).
     pub fn lock_create(&self) -> Result<LockGuard> {
         let path = self.root.join("locks").join("create.lock");
@@ -248,6 +291,15 @@ impl Store {
         }
         bail!("timed out waiting for {}", path.display())
     }
+}
+
+fn pid_alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 fn lock_is_stale(path: &Path) -> bool {
@@ -384,6 +436,42 @@ mod tests {
         assert!(d.path().join("locks/create.lock").exists());
         drop(g);
         assert!(!d.path().join("locks/create.lock").exists());
+    }
+
+    #[test]
+    fn instance_lock_is_exclusive_and_breaks_stale_holders() {
+        use std::time::Duration;
+        let d = Dir::new();
+        let store = Store::at(d.path().to_path_buf()).unwrap();
+        store.save(&sample("abc123", "one")).unwrap();
+        let g = store
+            .lock_instance("abc123", Duration::from_secs(1))
+            .unwrap();
+        let err = store
+            .lock_instance("abc123", Duration::from_millis(300))
+            .unwrap_err();
+        assert!(err.to_string().contains("busy"), "{err}");
+        assert_eq!(crate::errors::code_of(&err), crate::errors::CONFLICT);
+        drop(g);
+        assert!(
+            store
+                .lock_instance("abc123", Duration::from_secs(1))
+                .is_ok(),
+            "released on drop"
+        );
+        // A lock left behind by a dead process is broken.
+        let lock = d.path().join("instances/abc123/op.lock");
+        fs::write(&lock, "4294967294").unwrap();
+        assert!(
+            store
+                .lock_instance("abc123", Duration::from_secs(1))
+                .is_ok()
+        );
+        assert!(
+            store
+                .lock_instance("missing", Duration::from_millis(100))
+                .is_err()
+        );
     }
 
     #[test]

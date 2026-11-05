@@ -146,6 +146,13 @@ enum Command {
         #[arg(short, long)]
         follow: bool,
     },
+    /// Restart a stopped instance (cold boot; keeps its data)
+    Start {
+        instance: String,
+        /// Seconds to wait for Android to boot
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+    },
     /// Stop a running instance
     Stop {
         #[arg(required = true)]
@@ -242,6 +249,7 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Install { instance, apk } => commands::install(&instance, &apk),
         Command::Screenshot { instance, output } => commands::screenshot(&instance, &output),
         Command::Logs { instance, follow } => commands::logs(&instance, follow),
+        Command::Start { instance, timeout } => commands::start_existing(&instance, timeout),
         Command::Stop { instances } => commands::each(&instances, commands::stop),
         Command::Rm { instances, force } => commands::each(&instances, |i| commands::rm(i, force)),
     }

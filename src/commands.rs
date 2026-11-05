@@ -54,6 +54,9 @@ fn patch_config(path: &std::path::Path, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// How long a command waits for another command operating on the same instance.
+const OP_TIMEOUT: Duration = Duration::from_secs(60);
+
 pub struct Started {
     pub sdk: Sdk,
     pub store: Store,
@@ -336,7 +339,63 @@ pub fn run(a: RunArgs) -> Result<i32> {
     while !runtime::interrupted() && runtime::is_our_process(&inst) {
         std::thread::sleep(Duration::from_millis(500));
     }
+    let _op = store.lock_instance(&inst.id, OP_TIMEOUT)?;
+    inst = store.find(&inst.id)?;
     stop_instance(&sdk, &store, &mut inst)?;
+    Ok(0)
+}
+
+/// Restart a stopped, failed or crashed instance. It cold boots from the
+/// instance's own userdata, so files it wrote earlier are still there; the image's
+/// snapshot is deliberately not restored because it would roll that data back.
+pub fn start_existing(key: &str, timeout: u64) -> Result<i32> {
+    let sdk = Sdk::locate().map_err(errors::with(errors::DEPENDENCY))?;
+    let store = Store::open()?;
+    let found = store.find(key)?;
+    let _op = store.lock_instance(&found.id, OP_TIMEOUT)?;
+    let mut inst = store.find(&found.id)?;
+    runtime::reconcile(&store, &mut inst)?;
+    if inst.state.expects_process() {
+        return Err(errors::with(errors::CONFLICT)(anyhow::anyhow!(
+            "instance {} is already {}",
+            inst.name,
+            inst.state.as_str()
+        )));
+    }
+    if inst.state == State::Created {
+        return Err(errors::with(errors::CONFLICT)(anyhow::anyhow!(
+            "instance {} was never started; remove it and run it again",
+            inst.name
+        )));
+    }
+    runtime::install_interrupt_handler();
+    {
+        let _create = store
+            .lock_create()
+            .map_err(errors::with(errors::CONFLICT))?;
+        inst.console_port =
+            runtime::allocate_port(&store, None).map_err(errors::with(errors::CONFLICT))?;
+        inst.set_state(State::Starting)?;
+        inst.snapshot = None;
+        inst.pid = Some(
+            runtime::spawn_emulator(&sdk, &store, &inst, &BootMode::Cold)
+                .map_err(errors::with(errors::STARTUP))?,
+        );
+        store.save(&inst)?;
+    }
+    eprintln!("Starting {} ({}) on {}", inst.name, inst.id, inst.serial());
+    let t0 = std::time::Instant::now();
+    runtime::wait_ready(
+        &sdk,
+        &store,
+        &mut inst,
+        Duration::from_secs(timeout),
+        runtime::interrupted,
+        || eprintln!("  Android is booting..."),
+    )
+    .map_err(errors::with(errors::STARTUP))?;
+    eprintln!("Ready in {:.1}s (cold boot)", t0.elapsed().as_secs_f64());
+    println!("{}", inst.id);
     Ok(0)
 }
 
@@ -567,8 +626,10 @@ pub fn each(keys: &[String], f: impl Fn(&str) -> Result<i32>) -> Result<i32> {
 
 pub fn stop(key: &str) -> Result<i32> {
     let store = Store::open()?;
-    let mut inst = store.find(key)?;
+    let inst = store.find(key)?;
     let sdk = Sdk::locate().map_err(errors::with(errors::DEPENDENCY))?;
+    let _op = store.lock_instance(&inst.id, OP_TIMEOUT)?;
+    let mut inst = store.find(&inst.id)?; // re-read under the lock
     stop_instance(&sdk, &store, &mut inst)?;
     println!("{}", inst.name);
     Ok(0)
@@ -576,7 +637,9 @@ pub fn stop(key: &str) -> Result<i32> {
 
 pub fn rm(key: &str, force: bool) -> Result<i32> {
     let store = Store::open()?;
-    let mut inst = store.find(key)?;
+    let inst = store.find(key)?;
+    let _op = store.lock_instance(&inst.id, OP_TIMEOUT)?;
+    let mut inst = store.find(&inst.id)?; // re-read under the lock
     runtime::reconcile(&store, &mut inst)?;
     if inst.state.expects_process() {
         if !force {
