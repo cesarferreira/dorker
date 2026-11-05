@@ -119,6 +119,9 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
     } else {
         Some(images::find(&store, &a.image).map_err(cfg)?)
     };
+    if let Some(m) = &image_meta {
+        images::touch_used(&store, &m.id); // so `dorker prune --older-than` knows it is in use
+    }
     let (sys, mut memory_mb, mut cpus, disk_mb, headless, gpu, device, (width, height)) =
         match &image_meta {
             Some(m) => {

@@ -37,6 +37,26 @@ pub struct ImageMeta {
     /// Package launched after startup (`CMD launch <package>`).
     pub launch: Option<String>,
     pub created_at: u64,
+    /// Last time an instance was started from this image or a build reused it (unix seconds).
+    /// `None` for images made before this was tracked: `last_used_or_created` falls back.
+    #[serde(default)]
+    pub last_used: Option<u64>,
+}
+
+impl ImageMeta {
+    pub fn last_used_or_created(&self) -> u64 {
+        self.last_used.unwrap_or(self.created_at)
+    }
+}
+
+/// Record that an image was just used (a run or a cache-hit build). Best effort: a failure to
+/// write this bookkeeping must never stop a run.
+pub fn touch_used(store: &Store, id: &str) {
+    let Ok(mut meta) = find(store, id) else {
+        return;
+    };
+    meta.last_used = Some(crate::store::now_secs());
+    let _ = save_meta(store, &meta);
 }
 
 fn default_gpu() -> String {
@@ -192,6 +212,7 @@ mod tests {
             snapshot: Some("ready".into()),
             launch: None,
             created_at: 1,
+            last_used: None,
         }
     }
 

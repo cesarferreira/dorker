@@ -7,6 +7,7 @@ mod errors;
 mod images;
 mod log;
 mod mcp;
+mod prune;
 mod runtime;
 mod sdk;
 mod store;
@@ -72,6 +73,26 @@ enum Command {
     },
     /// Remove an image
     Rmi { image: String },
+    /// Free disk: remove unused images (and optionally stopped instances)
+    Prune {
+        /// Also remove tagged images that no instance uses (default: untagged ones only)
+        #[arg(short, long)]
+        all: bool,
+        /// Also remove instances that are not running (stopped, failed, crashed)
+        #[arg(long)]
+        instances: bool,
+        /// Only things last used (images) or created (instances) longer ago, e.g. 7d, 12h
+        #[arg(long)]
+        older_than: Option<String>,
+        /// Show what would be removed and exit
+        #[arg(long)]
+        dry_run: bool,
+        /// Do not ask for confirmation
+        #[arg(short, long)]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// List the Android versions you can use (installed, and available to pull)
     Versions {
         /// Only this API level, e.g. 37
@@ -365,6 +386,21 @@ fn run(cli: Cli) -> Result<i32> {
         }),
         Command::Images { json } => commands::images(json),
         Command::Rmi { image } => commands::rmi(&image),
+        Command::Prune {
+            all,
+            instances,
+            older_than,
+            dry_run,
+            yes,
+            json,
+        } => prune::run(prune::PruneArgs {
+            all,
+            instances,
+            older_than,
+            dry_run,
+            yes,
+            json,
+        }),
         Command::Ps { all, json } => commands::ps(all, json),
         Command::Exec {
             json,

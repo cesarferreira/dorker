@@ -426,6 +426,18 @@ fn versions_without_an_sdk_is_a_missing_dependency() {
 }
 
 #[test]
+fn prune_on_an_empty_store_is_a_no_op_and_json_needs_an_explicit_choice() {
+    let e = Env::new("prune-empty");
+    let o = e.run(&["prune"]);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert_eq!(text(&o.stdout).trim(), "Nothing to prune.");
+    assert_eq!(code(&e.run(&["prune", "--json"])), 2);
+    let o = e.run(&["prune", "--json", "--dry-run"]);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["reclaimable_bytes"], 0);
+}
+
+#[test]
 fn init_creates_a_parseable_dorkerfile_and_never_overwrites() {
     let e = Env::new("init");
     let dir = e.home.join("proj");

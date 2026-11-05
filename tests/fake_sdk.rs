@@ -1360,3 +1360,173 @@ fn run_without_an_image_explains_missing_or_broken_dorkerfiles() {
         text(&out.stderr)
     );
 }
+
+// ---------- dorker prune ----------
+
+/// Build an image from `FROM android:35` with the given extra lines; returns its id.
+fn build_image(f: &Fake, name: &str, extra: &str, tag: Option<&str>) -> String {
+    let ctx = f.root.join(format!("ctx-{name}"));
+    std::fs::create_dir_all(&ctx).unwrap();
+    std::fs::write(ctx.join("Dorkerfile"), format!("FROM android:35\n{extra}")).unwrap();
+    let mut args = vec!["build"];
+    if let Some(t) = tag {
+        args.extend(["-t", t]);
+    }
+    args.push(ctx.to_str().unwrap());
+    let out = f.run(&args);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    text(&out.stdout).trim().to_string()
+}
+
+fn image_ids(f: &Fake) -> Vec<String> {
+    let v: serde_json::Value =
+        serde_json::from_slice(&f.run(&["images", "--json"]).stdout).unwrap();
+    let mut ids: Vec<String> = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["id"].as_str().unwrap().to_string())
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// Make an image look like it was last used `secs_ago` seconds ago.
+fn age_image(f: &Fake, id: &str, secs_ago: u64) {
+    let path = f.home.join("images").join(id).join("image.json");
+    let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    v["last_used"] = serde_json::json!(now - secs_ago);
+    v["created_at"] = serde_json::json!(now - secs_ago - 10);
+    std::fs::write(path, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
+}
+
+#[test]
+fn prune_removes_only_what_is_unused_and_never_deletes_without_confirmation() {
+    let _guard = serial();
+    let f = Fake::new("prune", true);
+    let keep_tagged = build_image(&f, "a", "MEMORY 2GB\n", Some("keep:1"));
+    let unused_b = build_image(&f, "b", "MEMORY 3GB\n", None);
+    let in_use = build_image(&f, "c", "MEMORY 4GB\n", None);
+    let unused_d = build_image(&f, "d", "MEMORY 5GB\n", None);
+    assert_eq!(image_ids(&f).len(), 4);
+    assert_eq!(code(&f.run(&["run", "-d", "--name", "u", &in_use])), 0);
+
+    // Not a terminal and no --yes: refuse, and delete nothing.
+    let out = f.run(&["prune"]);
+    assert_eq!(code(&out), 2, "{}", text(&out.stderr));
+    assert!(text(&out.stderr).contains("--yes"), "{}", text(&out.stderr));
+    assert_eq!(image_ids(&f).len(), 4, "nothing was removed");
+
+    // --dry-run lists exactly the untagged, unused images and removes nothing.
+    let out = f.run(&["prune", "--dry-run"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let plan = text(&out.stdout);
+    assert!(
+        plan.contains(&unused_b) && plan.contains(&unused_d),
+        "{plan}"
+    );
+    assert!(
+        !plan.contains(&keep_tagged) && !plan.contains(&in_use),
+        "tagged and in-use images are not offered: {plan}"
+    );
+    assert!(
+        plan.contains("Kept: 1 used by instances, 1 tagged"),
+        "{plan}"
+    );
+    assert!(
+        plan.contains("--instances"),
+        "mentions what is not covered: {plan}"
+    );
+    assert_eq!(image_ids(&f).len(), 4);
+
+    // --yes removes them. The instance that was made from an image keeps running.
+    let out = f.run(&["prune", "--yes"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    assert!(
+        text(&out.stdout).contains("Removed 2 image(s)"),
+        "{}",
+        text(&out.stdout)
+    );
+    let mut left = vec![keep_tagged.clone(), in_use.clone()];
+    left.sort();
+    assert_eq!(image_ids(&f), left);
+    assert_eq!(f.live_emulators().len(), 1);
+    assert!(
+        text(&f.run(&["prune", "--yes"]).stdout).starts_with("Nothing to prune."),
+        "nothing is left to remove by default"
+    );
+
+    // --all also removes the tagged image, but still never one an instance came from.
+    let out = f.run(&["prune", "--all", "--yes"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(image_ids(&f), std::slice::from_ref(&in_use));
+}
+
+#[test]
+fn prune_older_than_instances_json_and_incomplete_builds() {
+    let _guard = serial();
+    let f = Fake::new("prune-more", true);
+    let old = build_image(&f, "old", "MEMORY 3GB\n", None);
+    let fresh = build_image(&f, "fresh", "MEMORY 4GB\n", None);
+    age_image(&f, &old, 10 * 86_400);
+
+    // --older-than keeps the recently used image.
+    let out = f.run(&["prune", "--older-than", "7d", "--yes"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(image_ids(&f), std::slice::from_ref(&fresh));
+    assert_eq!(
+        code(&f.run(&["prune", "--older-than", "soon"])),
+        2,
+        "a bad duration is a configuration error"
+    );
+
+    // JSON: machine-readable plan; refuses to delete unless told to.
+    let _extra = build_image(&f, "extra", "MEMORY 5GB\n", None);
+    assert_eq!(code(&f.run(&["prune", "--json"])), 2);
+    let out = f.run(&["prune", "--json", "--dry-run"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is only JSON");
+    assert_eq!(v["dry_run"], true);
+    assert_eq!(v["images"].as_array().unwrap().len(), 2);
+    assert!(v["reclaimable_bytes"].as_u64().unwrap() > 0);
+    assert_eq!(image_ids(&f).len(), 2, "a dry run removes nothing");
+
+    // Instances: stopped ones go with --instances, running ones stay.
+    assert_eq!(code(&f.run(&["run", "-d", "--name", "stays", &fresh])), 0);
+    assert_eq!(code(&f.run(&["run", "-d", "--name", "goes", &fresh])), 0);
+    assert_eq!(code(&f.run(&["stop", "goes"])), 0);
+    wait_until("the stopped emulator to exit", || {
+        f.live_emulators().len() == 1
+    });
+    let out = f.run(&["prune", "--instances", "--yes"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let names: Vec<String> = ps_json(&f)
+        .iter()
+        .map(|i| i["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names, ["stays"], "only the stopped instance was removed");
+    assert_eq!(f.live_emulators().len(), 1);
+
+    // Leftovers of an interrupted build are cleaned once they are not brand new.
+    let partial = f.home.join("images").join(".deadbeef.partial");
+    std::fs::create_dir_all(partial.join("avd")).unwrap();
+    assert!(
+        text(&f.run(&["prune", "--dry-run"]).stdout).contains("Nothing to prune")
+            || !text(&f.run(&["prune", "--dry-run"]).stdout).contains("Incomplete"),
+        "a fresh partial may be a build in progress"
+    );
+    let file = std::fs::File::open(&partial).unwrap();
+    file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))
+        .unwrap();
+    let out = f.run(&["prune", "--yes"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    assert!(!partial.exists(), "the stale partial build was removed");
+    assert_eq!(
+        image_ids(&f),
+        std::slice::from_ref(&fresh),
+        "the default prune also removed the unused image; the one an instance came from stays"
+    );
+}

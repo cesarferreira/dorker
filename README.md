@@ -179,6 +179,24 @@ Measured on an Apple M4 Pro, API 35, 2GB: cold boot about 15s, snapshot restore
 about 4s. Host memory is about 2.5GB after a cold boot and 3.3GB after a restore.
 Details and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 
+### Free disk space
+
+Every Dorkerfile change makes a new image of about 3-5 GB. `dorker prune` removes the ones
+you no longer need:
+
+```bash
+dorker prune --dry-run             # show what would be removed
+dorker prune                       # remove it, after asking
+dorker prune --all --instances     # also tagged images and stopped instances
+dorker prune --older-than 7d -y    # only things untouched for a week, no prompt
+```
+
+By default it removes only images with no tag that no instance was made from; tagged
+images, images behind existing instances and running instances are always kept (`--all`
+adds unused tagged images, `--instances` adds stopped ones). It lists what it will remove
+first and, outside a terminal, refuses to delete without `--yes`. It also clears the
+leftovers of interrupted builds. A removed image is simply rebuilt the next time you need it.
+
 ### Test, benchmark, automate
 
 ```bash

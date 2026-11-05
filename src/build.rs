@@ -304,6 +304,7 @@ pub fn build_image(a: &BuildArgs) -> Result<ImageMeta> {
         snapshot: df.snapshot.clone(),
         launch,
         created_at: now_secs(),
+        last_used: None,
     };
 
     let cached = !a.no_cache && images::image_dir(&store, &id).join("image.json").is_file();
@@ -314,6 +315,7 @@ pub fn build_image(a: &BuildArgs) -> Result<ImageMeta> {
     );
     if cached {
         meta = images::find(&store, &id)?;
+        images::touch_used(&store, &id);
         eprintln!("Using cached image {id} (identical Dorkerfile, APKs and toolchain)");
     } else {
         // A build holds the guest's RAM image (the snapshot) plus provisioned userdata.
