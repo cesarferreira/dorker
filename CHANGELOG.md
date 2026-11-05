@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2] - 2026-11-05
+
+### 🚀 Features
+
+- Add an MCP server and --json output for agent workflows
+
+### 🐛 Bug Fixes
+
+- Take MCP screenshots over stdout instead of a temporary file
+
+### 📚 Documentation
+
+- HEADLESS false verified on macOS; partial explanation of the restore gap
+- Record that the emulator listens on loopback only (macOS)
+
+### 🧪 Testing
+
+- Cover lifecycle and failure paths against a fake Android SDK
 ## [0.1.1] - 2026-11-05
 
 ### 🚀 Features
