@@ -122,7 +122,7 @@ See [examples/instrumentation](examples/instrumentation) for a runnable example.
 ### Tests
 
 ```bash
-cargo test                          # unit + CLI tests, no emulator needed
+cargo test                          # unit, CLI and fake-SDK lifecycle/failure tests (no emulator needed)
 cargo test -- --ignored --test-threads=1   # end-to-end: boots real emulators (~2 min)
 ```
 
