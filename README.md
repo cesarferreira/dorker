@@ -170,7 +170,9 @@ dorker exec b1 "pm list packages | grep dorker"
 dorker rm -f b1
 ```
 
-Every directive is documented in [docs/dorkerfile.md](docs/dorkerfile.md). More examples:
+`INSTALL` takes an `.apk` or an `.xapk` bundle (split APKs and OBB files), and
+`FROM android:35-playstore` picks the Google Play Store image. Every directive is
+documented in [docs/dorkerfile.md](docs/dorkerfile.md). More examples:
 [examples/basic](examples/basic), [examples/instrumentation](examples/instrumentation) and
 [examples/counter-app](examples/counter-app), a real Gradle app with Espresso tests
 (`./dev.sh` runs Gradle, `dorker build`, `run`, a screenshot and the tests). The example APKs

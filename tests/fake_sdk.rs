@@ -41,6 +41,7 @@ port=${serial#emulator-}
 if [ -n "$serial" ]; then
   [ -f "$FAKE_PIDDIR/$port.pid" ] && kill -0 "$(cat "$FAKE_PIDDIR/$port.pid")" 2>/dev/null || { echo "error: device '$serial' not found" >&2; exit 1; }
 fi
+echo "$*" >> "$FAKE_PIDDIR/adb.log"
 case "$1" in
   shell)
     shift
@@ -69,7 +70,8 @@ case "$1" in
         printf '\377\000\000\377\000\377\000\377\000\000\377\377\377\377\377\377'
       fi
     fi ;;
-  install) echo "Success" ;;
+  install|install-multiple) echo "Success" ;;
+  push) echo "1 file pushed" ;;
   logcat) echo "fake logcat line" ;;
   version) echo "Android Debug Bridge version 1.0.41" ;;
 esac
@@ -252,6 +254,50 @@ fn full_lifecycle_against_the_fake_sdk() {
     let apk = f.root.join("a.apk");
     std::fs::write(&apk, b"x").unwrap();
     assert_eq!(code(&f.run(&["install", "one", apk.to_str().unwrap()])), 0);
+
+    // An .xapk bundle installs its split APKs together (base first) and pushes its OBB.
+    let bundle = f.root.join("app.xapk");
+    {
+        use std::io::Write;
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&bundle).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        let manifest = r#"{"package_name":"com.x","split_apks":[{"file":"config.apk","id":"config"},{"file":"com.x.apk","id":"base"}],"expansions":[{"file":"main.obb","install_path":"Android/obb/com.x/main.obb"}]}"#;
+        for (name, data) in [
+            ("manifest.json", manifest.as_bytes()),
+            ("config.apk", b"c".as_slice()),
+            ("com.x.apk", b"b".as_slice()),
+            ("main.obb", b"o".as_slice()),
+        ] {
+            z.start_file(name, opts).unwrap();
+            z.write_all(data).unwrap();
+        }
+        z.finish().unwrap();
+    }
+    let out = f.run(&["install", "one", bundle.to_str().unwrap()]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let log = std::fs::read_to_string(f.piddir.join("adb.log")).unwrap();
+    let multi = log
+        .lines()
+        .find(|l| l.contains("install-multiple"))
+        .unwrap_or_else(|| panic!("no install-multiple in:\n{log}"));
+    assert!(
+        multi.find("com.x.apk").unwrap() < multi.find("config.apk").unwrap(),
+        "{multi}"
+    );
+    assert!(
+        log.contains("push") && log.contains("/sdcard/Android/obb/com.x/main.obb"),
+        "{log}"
+    );
+    // A file that is not a zip fails with a clear message and the adb exit code.
+    let junk = f.root.join("junk.xapk");
+    std::fs::write(&junk, b"nope").unwrap();
+    let bad = f.run(&["install", "one", junk.to_str().unwrap()]);
+    assert_eq!(code(&bad), 6);
+    assert!(
+        text(&bad.stderr).contains("not a valid .xapk"),
+        "{}",
+        text(&bad.stderr)
+    );
 
     // stop keeps the record; the emulator process is gone.
     assert_eq!(code(&f.run(&["stop", "one"])), 0);

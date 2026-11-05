@@ -405,7 +405,7 @@ fn build_new(
     published
 }
 
-fn adb_checked(sdk: &Sdk, serial: &str, args: &[&str], what: &str) -> Result<String> {
+pub(crate) fn adb_checked(sdk: &Sdk, serial: &str, args: &[&str], what: &str) -> Result<String> {
     let out = runtime::adb(sdk, serial)
         .args(args)
         .output()
@@ -441,12 +441,7 @@ fn provision(
     let serial = inst.serial();
     for apk in apks {
         eprintln!("Installing {}", apk.written);
-        adb_checked(
-            sdk,
-            &serial,
-            &["install", "-r", &apk.path.to_string_lossy()],
-            &format!("installing {}", apk.written),
-        )?;
+        crate::xapk::install(sdk, &serial, &apk.path, &apk.written)?;
     }
     for s in &df.settings {
         eprintln!("Setting {} {} = {}", s.namespace, s.key, s.value);

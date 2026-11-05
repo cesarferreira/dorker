@@ -1057,23 +1057,24 @@ pub fn install(key: &str, apk: &Path, json: bool) -> Result<i32> {
         bail!("APK not found: {}", apk.display());
     }
     let (sdk, inst) = ready_instance(key)?;
-    let mut cmd = runtime::adb(&sdk, &inst.serial());
-    cmd.args(["install", "-r"]).arg(apk);
+    // A plain .apk or an .xapk bundle (split APKs and OBB files).
+    let result = crate::xapk::install(&sdk, &inst.serial(), apk, &apk.display().to_string());
+    let ok = result.is_ok();
+    let output = match &result {
+        Ok(text) => text.trim().to_string(),
+        Err(e) => format!("{e:#}"),
+    };
     if json {
-        let out = cmd.output().context("running adb")?;
-        let ok =
-            out.status.success() && !String::from_utf8_lossy(&out.stdout).contains("Failure [");
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "ok": ok,
-                "output": format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)).trim(),
-            }))?
+            serde_json::to_string_pretty(&serde_json::json!({ "ok": ok, "output": output }))?
         );
-        return Ok(if ok { 0 } else { errors::ADB });
+    } else if ok {
+        println!("{output}");
+    } else {
+        eprintln!("error: {output}");
     }
-    let status = cmd.status().context("running adb")?;
-    Ok(if status.success() { 0 } else { errors::ADB })
+    Ok(if ok { 0 } else { errors::ADB })
 }
 
 /// True when a raw `screencap` frame (header + RGBA pixels) is essentially one flat colour,

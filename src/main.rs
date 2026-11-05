@@ -18,6 +18,7 @@ mod testcmd;
 mod testutil;
 mod units;
 mod versions;
+mod xapk;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

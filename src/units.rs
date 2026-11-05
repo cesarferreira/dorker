@@ -39,6 +39,16 @@ impl std::fmt::Display for ImageRef {
     }
 }
 
+/// Short flavour names: `playstore` is Google's `google_apis_playstore` image (and
+/// `playstore_ps16k` its 16 KB-page variant). Full names are passed through unchanged.
+fn expand_flavour(f: &str) -> String {
+    if f == "playstore" || f.starts_with("playstore_") {
+        format!("google_apis_{f}")
+    } else {
+        f.to_string()
+    }
+}
+
 impl ImageRef {
     pub fn parse(input: &str) -> Result<Self> {
         let Some(tag) = input.strip_prefix("android:") else {
@@ -48,7 +58,7 @@ impl ImageRef {
             );
         };
         let (api, flavour) = match tag.split_once('-') {
-            Some((api, flavour)) if !flavour.is_empty() => (api, Some(flavour.to_string())),
+            Some((api, flavour)) if !flavour.is_empty() => (api, Some(expand_flavour(flavour))),
             _ => (tag, None),
         };
         let bad = || anyhow::anyhow!("invalid Android API level in {input:?}");
@@ -68,6 +78,35 @@ impl ImageRef {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playstore_is_a_short_name_for_the_google_play_flavour() {
+        let r = ImageRef::parse("android:35-playstore").unwrap();
+        assert_eq!(r.flavour.as_deref(), Some("google_apis_playstore"));
+        assert_eq!(r.to_string(), "android:35-google_apis_playstore");
+        assert_eq!(
+            ImageRef::parse("android:37-playstore_ps16k")
+                .unwrap()
+                .flavour
+                .as_deref(),
+            Some("google_apis_playstore_ps16k")
+        );
+        // Full names and other flavours are untouched.
+        assert_eq!(
+            ImageRef::parse("android:35-google_apis_playstore")
+                .unwrap()
+                .flavour
+                .as_deref(),
+            Some("google_apis_playstore")
+        );
+        assert_eq!(
+            ImageRef::parse("android:35-aosp_atd")
+                .unwrap()
+                .flavour
+                .as_deref(),
+            Some("aosp_atd")
+        );
+    }
 
     #[test]
     fn sizes() {
