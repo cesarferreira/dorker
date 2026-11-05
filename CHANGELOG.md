@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2026-11-05
+
+### 🚀 Features
+
+- Dorker pull with no arguments installs the Dorkerfile's FROM image
+
+### 🐛 Bug Fixes
+
+- Make screenshots wait for a non-blank frame
 ## [0.1.2] - 2026-11-05
 
 ### 🚀 Features
