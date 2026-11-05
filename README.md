@@ -89,6 +89,8 @@ dorker rm -f t1
 ```
 
 See [docs/dorkerfile.md](docs/dorkerfile.md) and [examples/basic](examples/basic).
+[examples/counter-app](examples/counter-app) is a real Gradle app with Espresso tests
+(`./dev.sh` runs Gradle, `dorker build`, `run`, a screenshot and the tests).
 The example APKs are not committed: run `examples/basic/make-apk.sh` first (needs the
 Android build-tools and a JDK).
 
@@ -148,7 +150,7 @@ See [docs/architecture.md](docs/architecture.md) for design and limitations.
 - **`CMD`** only supports `launch <package>`. There is no `dorker start` for stopped instances yet, no GPU-mode selection (software rendering is used when headless) and no automatic test-APK discovery.
 - **Concurrency:** creating instances concurrently is safe (a lock serialises name and port allocation), but there is no per-instance lock, so running `stop`, `rm -f` or a foreground `run` on the *same* instance at the same time is not serialised.
 - **Orphans:** emulator processes that dorker started but lost track of (CLI killed mid-start) are reported by `dorker ps`, not adopted or killed automatically.
-- The manifest-only sample APKs in `examples/` are for demonstration, not real apps.
+- `examples/basic` and `examples/instrumentation` use tiny hand-built APKs; `examples/counter-app` is the realistic one.
 
 <a id="development"></a>
 ## Development
