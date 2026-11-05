@@ -5,10 +5,10 @@ Installs Google's Android Auto app (`com.google.android.projection.gearhead`) fr
 CPU architecture, language and screen density.
 
 ```bash
-cargo install apkeep           # once
-./fetch.sh                     # downloads the Android Auto .xapk
+cargo install apkeep        # once
+./fetch.sh                  # downloads the Android Auto .xapk
 
-dorker build -t gearhead .     # installs the bundle, all splits together
+dorker build -t gearhead .  # installs the bundle, all splits together
 dorker run -d --name auto gearhead
 dorker exec auto "pm list packages | grep gearhead"
 dorker rm -f auto
@@ -20,16 +20,15 @@ new image, because the file's hash is part of the image identity.
 ## Setting up the head unit server (once)
 
 Android Auto's developer mode is a setting inside the app, so installing the APK does not
-turn it on, and tools that drive a head unit (such as `aa`) report "head-unit server could
-not start". `enable-dev-mode.sh` does it for you on a running instance, then you save the
-instance as an image:
+turn it on, and the head unit server (what a head unit emulator connects to) does not run
+until it is started. `enable-dev-mode.sh` does both on a running instance, then you save
+the instance as an image:
 
 ```bash
-dorker run -d --name setup          # builds the Dorkerfile here, then runs it
-./enable-dev-mode.sh setup          # developer mode on, server started
+dorker run -d --name setup                # builds this Dorkerfile and runs it
+./enable-dev-mode.sh setup                # developer mode on, server started
 dorker commit setup -t gearhead:ready
-dorker run -d --name auto gearhead:ready   # starts with the server listening
-aa session start                    # an openDHU session against it
+dorker run -d --name auto gearhead:ready  # the server is already up
 ```
 
 The script drives the app's UI over adb. It finds each button by its text, not by screen
@@ -49,7 +48,7 @@ then scroll to the bottom and tap **Version** about 10 times, choose **OK** in t
 development settings?" dialog, open the **&#8942;** menu and choose **Start head unit server**.
 
 Checked on an Apple Silicon Mac with `android:36-playstore` and Android Auto 17.9: the
-server survived the commit and a restore, and `aa session start` reached `running`.
+server survived the commit and a restore.
 
 Notes:
 
