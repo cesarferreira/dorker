@@ -174,7 +174,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Capture a PNG screenshot
+    /// Capture a PNG screenshot (use `-` as the output to write the PNG to stdout)
     Screenshot {
         instance: String,
         output: std::path::PathBuf,

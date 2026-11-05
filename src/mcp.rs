@@ -7,7 +7,6 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
-use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
@@ -228,8 +227,8 @@ pub enum Kind {
     Names(&'static str),
     /// Plain text stdout (logs).
     Text,
-    /// Screenshot: argv has a placeholder path at this index to be replaced.
-    Screenshot(usize),
+    /// Screenshot: the PNG arrives as raw bytes on stdout (`screenshot <i> -`), no temp file.
+    Screenshot,
 }
 
 #[derive(Debug)]
@@ -368,10 +367,7 @@ pub fn build_invocation(name: &str, args: &Value) -> Result<Invocation, String> 
         "dorker_screenshot" => {
             let i = req_str(args, "instance")?;
             no_flag("instance", &i)?;
-            (
-                vec![s("screenshot"), i, s("<PATH>"), s("--json")],
-                Kind::Screenshot(2),
-            )
+            (vec![s("screenshot"), i, s("-")], Kind::Screenshot)
         }
         "dorker_logs" => {
             let i = req_str(args, "instance")?;
@@ -453,24 +449,17 @@ fn tail_chars(s: &str, max: usize) -> String {
 
 /// Run `dorker <argv>` and interpret its output per `kind`.
 pub fn run_cli(exe: &std::path::Path, inv: &Invocation) -> ToolResult {
-    let mut argv = inv.argv.clone();
-    let mut shot_path: Option<PathBuf> = None;
-    if let Kind::Screenshot(idx) = inv.kind {
-        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let p = std::env::temp_dir().join(format!(
-            "dorker-mcp-{}-{}.png",
-            std::process::id(),
-            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        argv[idx] = p.to_string_lossy().into_owned();
-        shot_path = Some(p);
-    }
-    let out = match Command::new(exe).args(&argv).output() {
+    let out = match Command::new(exe).args(&inv.argv).output() {
         Ok(o) => o,
         Err(e) => return ToolResult::text(format!("could not run dorker: {e}"), true),
     };
     let code = out.status.code().unwrap_or(1);
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    // A screenshot's stdout is binary PNG data, so only decode text results.
+    let stdout = if inv.kind == Kind::Screenshot {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     let failure = |code: i32| {
         let detail = if stderr.trim().is_empty() {
@@ -488,7 +477,7 @@ pub fn run_cli(exe: &std::path::Path, inv: &Invocation) -> ToolResult {
         )
     };
 
-    let result = match &inv.kind {
+    match &inv.kind {
         Kind::Json(wrap) => match serde_json::from_str::<Value>(&stdout) {
             // A parseable result is returned even on a non-zero exit (exec, test and doctor
             // report failures inside the JSON).
@@ -512,25 +501,23 @@ pub fn run_cli(exe: &std::path::Path, inv: &Invocation) -> ToolResult {
             },
             false,
         ),
-        Kind::Screenshot(_) if code == 0 => {
-            match shot_path.as_ref().and_then(|p| std::fs::read(p).ok()) {
-                Some(png) => ToolResult {
+        Kind::Screenshot if code == 0 => {
+            let png = &out.stdout;
+            if png.starts_with(b"\x89PNG\r\n\x1a\n") {
+                ToolResult {
                     content: vec![
-                        json!({"type": "image", "data": base64_encode(&png), "mimeType": "image/png"}),
+                        json!({"type": "image", "data": base64_encode(png), "mimeType": "image/png"}),
                         json!({"type": "text", "text": format!("screenshot, {} bytes", png.len())}),
                     ],
                     structured: None,
                     is_error: false,
-                },
-                None => ToolResult::text("screenshot file was not written", true),
+                }
+            } else {
+                ToolResult::text("screenshot did not return PNG data", true)
             }
         }
         _ => failure(code),
-    };
-    if let Some(p) = shot_path {
-        let _ = std::fs::remove_file(p);
     }
-    result
 }
 
 // ---------- JSON-RPC handling (pure, unit-tested) ----------
@@ -885,6 +872,18 @@ mod tests {
                 "--timeout",
                 "30"
             ]
+        );
+    }
+
+    #[test]
+    fn screenshot_never_uses_a_temp_file() {
+        let inv = build_invocation("dorker_screenshot", &json!({"instance": "t1"})).unwrap();
+        // The PNG comes back on stdout (`-`); there is no path to predict or race on.
+        assert_eq!(inv.argv, ["screenshot", "t1", "-"]);
+        assert_eq!(inv.kind, Kind::Screenshot);
+        assert!(
+            !include_str!("mcp.rs").contains(concat!("temp", "_dir()")),
+            "mcp.rs must not create temp files"
         );
     }
 

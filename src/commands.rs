@@ -742,6 +742,25 @@ pub fn screenshot(key: &str, output: &Path, json: bool) -> Result<i32> {
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
+    if output == Path::new("-") {
+        // PNG bytes on stdout, e.g. `dorker screenshot t1 - > shot.png`. The MCP server uses
+        // this so it never has to create a temporary file.
+        use std::io::{IsTerminal, Write};
+        if json {
+            bail!("--json cannot be combined with writing the PNG to stdout (`-`)");
+        }
+        if std::io::stdout().is_terminal() {
+            bail!(
+                "refusing to write binary image data to a terminal; redirect stdout or give a file name"
+            );
+        }
+        let mut so = std::io::stdout().lock();
+        so.write_all(&out.stdout)
+            .context("writing the PNG to stdout")?;
+        so.flush()?;
+        eprintln!("Wrote {} bytes to stdout", out.stdout.len());
+        return Ok(0);
+    }
     std::fs::write(output, &out.stdout).with_context(|| format!("writing {}", output.display()))?;
     eprintln!("Saved {} ({} bytes)", output.display(), out.stdout.len());
     if json {

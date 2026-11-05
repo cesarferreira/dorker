@@ -66,6 +66,7 @@ The server runs with your user's privileges and is meant for local, trusted agen
   host files named in `dorker_install` (`apk_path`) and `dorker_build` (`context`).
 - It never runs a host shell. Arguments are passed as an argument vector, and values for
   instance and image names that start with `-` are rejected so they cannot become flags.
+- Screenshots never touch a temporary file: the PNG is read from the CLI's stdout (`dorker screenshot <instance> -`), so there is no predictable path for another local user to pre-create.
 - ADB is not exposed on the network; instances use the emulator's local console and adb ports.
 - Tool calls run as separate `dorker` processes. Long calls (a build) do not block other requests.
 

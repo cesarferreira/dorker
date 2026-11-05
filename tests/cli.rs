@@ -378,6 +378,12 @@ fn end_to_end_build_run_exec_screenshot_test_cleanup() {
             .starts_with(b"\x89PNG\r\n\x1a\n")
     );
 
+    // `-` writes the PNG to stdout (no file at all), and refuses to be combined with --json.
+    let piped = e.run(&["screenshot", "a", "-"]);
+    assert_eq!(code(&piped), 0, "{}", text(&piped.stderr));
+    assert!(piped.stdout.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert_ne!(code(&e.run(&["screenshot", "a", "-", "--json"])), 0);
+
     // Instrumentation: failures exit 7, a passing selection exits 0.
     let runner = "com.dorker.sample.test/com.dorker.sample.SampleRunner";
     let all = e.run(&["test", "a", "--runner", runner]);
