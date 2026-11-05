@@ -84,7 +84,7 @@ Transitions are validated by `State::can_become`.
 ├── images/<id>/avd/              golden AVD home (userdata + snapshot)
 ├── images/<id>/build.log
 ├── instances/<id>/instance.json
-├── instances/<id>/avd/           clone of an image, or a fresh AVD (+ userdata)
+├── instances/<id>/avd/           an image clone, or a fresh AVD (+ userdata)
 ├── instances/<id>/emulator.log
 └── locks/create.lock
 ```

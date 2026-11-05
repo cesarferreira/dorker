@@ -5,7 +5,8 @@ development: a counter that persists across process death, with three Espresso t
 
 ```bash
 cd examples/counter-app
-DORKER=../../target/debug/dorker ./dev.sh   # or just ./dev.sh with dorker on PATH
+# Use a locally built dorker (or just ./dev.sh with dorker on your PATH)
+DORKER=../../target/debug/dorker ./dev.sh
 ```
 
 `dev.sh` builds both APKs with Gradle, builds the image (`Dorkerfile`), starts an instance,
@@ -17,6 +18,7 @@ Needs a JDK 17+ and Android SDK platform 35. Manual steps:
 dorker build -t counter:dev .
 dorker run -d --name c1 counter:dev           # launches the app (CMD launch)
 dorker screenshot c1 shot.png
-dorker test c1 --runner com.dorker.counter.test/androidx.test.runner.AndroidJUnitRunner
+dorker test c1 \
+  --runner com.dorker.counter.test/androidx.test.runner.AndroidJUnitRunner
 dorker rm -f c1
 ```

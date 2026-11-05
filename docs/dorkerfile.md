@@ -5,7 +5,7 @@ A Dorkerfile describes an Android environment. Directives are case-insensitive,
 `FROM` must come first. Duplicate singleton directives are rejected. Errors
 include `file:line:col` and, for typos, a suggestion.
 
-```dockerfile
+```dorkerfile
 FROM android:35
 
 MEMORY 2GB

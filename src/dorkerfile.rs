@@ -484,7 +484,7 @@ mod tests {
         assert_eq!(d.cmd, Some(Cmd::Launch("com.example.application".into())));
     }
 
-    /// Every ```dockerfile block in the README and docs must parse, so the examples we show
+    /// Every ```dorkerfile block in the README and docs must parse, so the examples we show
     /// users can never drift out of sync with the parser.
     #[test]
     fn documented_dorkerfile_examples_parse() {
@@ -494,8 +494,8 @@ mod tests {
             ("docs/dorkerfile.md", include_str!("../docs/dorkerfile.md")),
         ] {
             let mut rest = text;
-            while let Some(start) = rest.find("```dockerfile\n") {
-                let body = &rest[start + "```dockerfile\n".len()..];
+            while let Some(start) = rest.find("```dorkerfile\n") {
+                let body = &rest[start + "```dorkerfile\n".len()..];
                 let end = body.find("```").expect("unterminated code block");
                 let block = &body[..end];
                 parse(name, block)

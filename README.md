@@ -69,16 +69,21 @@ image (`dorker pull` installs one). macOS Apple Silicon and Linux x86_64 with KV
 validated. No Docker needed.
 
 ```bash
-dorker doctor                                   # check your setup
-dorker pull android:35                          # install a system image if missing
-dorker run -d --name test android:35            # boots a headless emulator
+# Check your setup, then install a system image if one is missing
+dorker doctor
+dorker pull android:35
+
+# Boot a headless emulator and use it
+dorker run -d --name test android:35
 dorker ps
 dorker exec test "getprop ro.build.version.sdk"
 dorker install test ./app-debug.apk
-dorker screenshot test shot.png                 # waits up to 10s for a non-blank frame (--wait 0 to skip)
-dorker logs test                                # add -f to follow
+dorker screenshot test shot.png      # waits up to 10s for a non-blank frame
+dorker logs test                     # add -f to follow
+
+# Stop it, bring it back (cold boot, keeps its data), then delete it
 dorker stop test
-dorker start test                               # cold boots again, keeps its data
+dorker start test
 dorker rm test
 ```
 
@@ -87,47 +92,61 @@ dorker rm test
 A `Dorkerfile` (next to your app, like a Dockerfile) declares the Android environment: the
 base image, resources, the APK to install, settings, and a snapshot to start from.
 
-```dockerfile
+```dorkerfile
 # Dorkerfile
-FROM android:35                 # Android 35 system image (install it with: dorker pull)
+FROM android:35
 
-MEMORY 2GB                      # guest RAM
+MEMORY 2GB
 CPUS 2
 DISK 4GB
 DEVICE pixel_7
 RESOLUTION 1080x2400
-HEADLESS true                   # no emulator window
+HEADLESS true
 
-INSTALL ./app/build/outputs/apk/debug/app-debug.apk   # path is relative to this file's folder
+# Paths are relative to this file's folder.
+INSTALL ./app/build/outputs/apk/debug/app-debug.apk
 
-SETTING window_animation_scale 0        # make UI tests faster and less flaky
+# Turn off animations: faster, less flaky UI tests.
+SETTING window_animation_scale 0
 SETTING transition_animation_scale 0
 SETTING animator_duration_scale 0
 
-SNAPSHOT ready                  # save a snapshot, so instances start in a few seconds
-CMD launch com.example.app      # open this app once an instance is ready
+# Save a snapshot so instances start in a few seconds,
+# and open the app once an instance is ready.
+SNAPSHOT ready
+CMD launch com.example.app
 ```
 
 Then build the image once and run it as many times as you like:
 
 ```bash
-dorker pull                                 # installs the Dorkerfile's FROM image if it is missing
-dorker build -t myapp:latest .              # reads ./Dorkerfile, writes Dorkerfile.lock
-dorker run -d --name t1 myapp:latest        # starts from the snapshot in a few seconds
-dorker screenshot t1 shot.png               # the app is already open
-dorker test t1 --runner com.example.app.test/androidx.test.runner.AndroidJUnitRunner
-dorker rm -f t1                             # throw it away
+# Install the base image named by FROM, if it is missing
+dorker pull
 
-dorker run --rm myapp:latest                # or: foreground, removed when you press Ctrl-C
+# Build once: installs your APK, applies settings, saves the snapshot
+dorker build -t myapp:latest .
+
+# Run as often as you like; each run starts from the snapshot
+dorker run -d --name t1 myapp:latest
+dorker screenshot t1 shot.png
+dorker test t1 \
+  --runner com.example.app.test/androidx.test.runner.AndroidJUnitRunner
+dorker rm -f t1
+
+# Or run in the foreground; the instance is removed on Ctrl-C
+dorker run --rm myapp:latest
 ```
 
 An identical rebuild is a cache hit (instant), and every `dorker run` gets its own isolated
 copy, so instances never share state. To try it without your own app, use the sample:
 
 ```bash
-examples/basic/make-apk.sh                  # builds a tiny sample APK (needs Android build-tools + a JDK)
+# Build the tiny sample APK (needs the Android build-tools and a JDK)
+examples/basic/make-apk.sh
+
 dorker build -t basic examples/basic
-dorker run -d --name b1 basic && dorker exec b1 "pm list packages | grep dorker"
+dorker run -d --name b1 basic
+dorker exec b1 "pm list packages | grep dorker"
 dorker rm -f b1
 ```
 
@@ -148,11 +167,16 @@ Details and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 ### Test, benchmark, automate
 
 ```bash
-dorker init                                   # starter Dorkerfile
-dorker test t1 --runner com.example.test/androidx.test.runner.AndroidJUnitRunner
+dorker init                          # write a starter Dorkerfile
+dorker test t1 \
+  --runner com.example.test/androidx.test.runner.AndroidJUnitRunner
 dorker test t1 --runner ... --class com.example.FooTest#bar
-dorker bench myapp:latest --runs 3 --json     # boot, restore, launch, disk, idle usage
-dorker bench android:35 --baseline            # also time the plain official emulator
+
+# Boot, restore, launch, disk and idle numbers
+dorker bench myapp:latest --runs 3 --json
+
+# Also time the plain official emulator, for comparison
+dorker bench android:35 --baseline
 ```
 
 `dorker test` prints a summary, preserves the raw instrumentation output and logcat
@@ -162,8 +186,11 @@ See [examples/instrumentation](examples/instrumentation) for a runnable example.
 ### Tests
 
 ```bash
-cargo test                          # unit, CLI and fake-SDK lifecycle/failure tests (no emulator needed)
-cargo test -- --ignored --test-threads=1   # end-to-end: boots real emulators (~2 min)
+# Unit, CLI and fake-SDK lifecycle/failure tests (no emulator needed)
+cargo test
+
+# End-to-end: boots real emulators (about 3 minutes)
+cargo test -- --ignored --test-threads=1
 ```
 
 ### Use it from AI agents
