@@ -35,3 +35,31 @@ on 2026-11-05. Reproduce with the same command; add `--json` for machine-readabl
 - Image size is about 3.3 GB logical, of which a 2 GB `ram.bin` is the snapshot.
   Instances are APFS clones of it, so each starts cheap and grows as it writes.
 - Single machine, three runs, no warm-cache control. Treat as indicative.
+
+## Linux x86_64 (KVM)
+
+Same command (`dorker bench sample --runs 3 --apk examples/instrumentation/test.apk`) on
+2026-11-05, image from `examples/basic`.
+
+| | |
+|---|---|
+| Machine | Ubuntu 24.04, AMD EPYC 7763, 8 vCPUs, 31 GB, **Azure VM (nested virtualisation, `/dev/kvm`)** |
+| Emulator | 37.2.12.0 (same build as on the Mac) |
+| Image | API 35 `google_apis` **x86_64**, 2 GB, 2 CPUs, `swiftshader_indirect`, headless |
+
+| Metric | Result (median, samples) |
+|---|---|
+| Cold boot to verified readiness | 28.8 s (28.3, 28.8, 29.2) |
+| Snapshot restore to verified readiness | 9.2 s (9.2, 9.3, 9.0) |
+| APK install | 4.3 s |
+| Screenshot | 2.0 s |
+| Idle CPU (interval average) | 229 % of one core |
+| Idle host RSS | 3.6 GB |
+| Stop + remove | 2.2 s |
+| Image build (uncached) | 92 s |
+
+Notes: this is a virtual machine on shared infrastructure with nested virtualisation, so
+treat it as a pessimistic CI-like environment, not bare-metal Linux. Boots were slower
+(46-65 s) the first time an image was read from disk, and these numbers are from a warm
+page cache. The Mac's restore target (under 5 s) is **not** met here (9.2 s). Idle CPU is
+also much higher with software rendering on this CPU. Three runs, one machine.

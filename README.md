@@ -65,7 +65,8 @@ make build-release
 ## Quickstart
 
 Requires the Android SDK (`emulator`, `platform-tools`) and an installed system
-image. macOS Apple Silicon is the supported platform. No Docker needed.
+image (`dorker pull` installs one). macOS Apple Silicon and Linux x86_64 with KVM are
+validated. No Docker needed.
 
 ```bash
 dorker doctor                                   # check your setup
@@ -144,7 +145,7 @@ See [docs/architecture.md](docs/architecture.md) for design and limitations.
 
 ## Limitations
 
-- **Platform:** validated on macOS Apple Silicon only. Linux may work but is untested; Windows is unsupported.
+- **Platform:** validated on macOS Apple Silicon (primary) and Linux x86_64 with KVM (Ubuntu 24.04, an Azure VM with nested virtualisation; unit tests and the full emulator end-to-end suite pass). Linux arm64 and bare-metal Linux are untested; Windows is unsupported. Linux is slower in our measurements (cold boot about 29s, snapshot restore about 9s; see [docs/benchmarks.md](docs/benchmarks.md)).
 - **System images are installed on request, not automatically.** `dorker pull android:35` runs the SDK's `sdkmanager` (needs the command-line tools and may prompt for licences); `dorker run`/`build` print this command when an image is missing. The download path itself was only verified for the already-installed and nonexistent-package cases, not a real multi-GB download.
 - **Snapshots are strict.** A change of emulator version, system-image revision, memory or CPUs invalidates an image's snapshot. dorker then cold boots (about 15s) and says so. Snapshots are host-specific and not portable between machines.
 - **Memory:** a 2GB guest used about 5.5GB of host RAM in our measurements.

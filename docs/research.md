@@ -101,6 +101,27 @@ Measured with `dorker run` on this machine (API 35 `google_apis`, 2 GB, 2 CPUs,
 5 runs; cold boot 14.4-19.7 s across 6 runs. These are ad hoc runs, not a
 benchmark.
 
+## Linux x86_64 validation (2026-11-05)
+
+Ubuntu 24.04 Azure VM with nested KVM, emulator 37.2.12.0, the SDK's own `qemu-system-x86_64-headless`.
+
+- Everything works unmodified: `doctor`, `run`, `exec`, `screenshot`, `stop`, `build` with snapshots,
+  snapshot restore into a copy with the same AVD name, concurrent instances, `test`, `start`, `pull`.
+  The full emulator end-to-end suite passes (312 s).
+- `dorker pull android:35` really downloaded and installed `x86_64-35_r09` in 46 s. `sdkmanager`
+  printed a deprecation notice in favour of the Android CLI; it still works.
+- ext4 has no reflinks, so `cp --reflink=auto` falls back to a full copy of the ~3-4 GB image per
+  instance. That is correct but not free; on btrfs/xfs it would be a clone.
+- SDK directories with a minor version (`android-36.1`) exist next to `android-36`; they are distinct
+  images and are now modelled as such.
+- **Unexplained flake:** twice (the first e2e run, and one manual run, both the first boot after
+  `pull`), dorker reported "emulator exited during startup" although a QEMU for that instance was in
+  fact starting. It did not recur in about ten later boots, including the first boot of a
+  never-used image. The likely cause is the identity check reading the child's command line before
+  `exec` finished (the SDK is on a network mount). Process state is now `Ours`/`Foreign`/`Dead`,
+  read from `/proc`, and startup tolerates a pre-exec window, but I could not reproduce the failure,
+  so this fix is **unproven**. The error message now includes the command line last seen.
+
 ## Licensing
 
 - Google's scripts: Apache 2.0.

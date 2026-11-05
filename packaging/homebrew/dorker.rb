@@ -14,6 +14,13 @@ class Dorker < Formula
     end
   end
 
+  on_linux do
+    on_intel do
+      url "https://github.com/cesarferreira/dorker/releases/download/v#{version}/dorker-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "REPLACE_AT_RELEASE"
+    end
+  end
+
   def install
     bin.install "dorker"
   end

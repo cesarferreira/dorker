@@ -37,6 +37,34 @@ pub fn median(v: &[f64]) -> Option<f64> {
     })
 }
 
+fn os_label() -> String {
+    if let Some(v) = sh("sw_vers", &["-productVersion"]) {
+        return format!("macos {v}");
+    }
+    std::fs::read_to_string("/etc/os-release")
+        .ok()
+        .and_then(|t| {
+            t.lines().find_map(|l| {
+                l.strip_prefix("PRETTY_NAME=")
+                    .map(|v| v.trim_matches('"').to_string())
+            })
+        })
+        .unwrap_or_else(|| std::env::consts::OS.to_string())
+}
+
+fn cpu_model() -> Option<String> {
+    sh("sysctl", &["-n", "machdep.cpu.brand_string"]).or_else(|| {
+        std::fs::read_to_string("/proc/cpuinfo")
+            .ok()?
+            .lines()
+            .find_map(|l| {
+                l.strip_prefix("model name")
+                    .and_then(|r| r.split_once(':'))
+                    .map(|(_, v)| v.trim().to_string())
+            })
+    })
+}
+
 /// utime + stime (clock ticks) of a process, from `/proc/<pid>/stat`.
 fn proc_cpu_ticks(pid: u32) -> Option<u64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -151,9 +179,9 @@ pub fn run(a: BenchArgs) -> Result<i32> {
     }
 
     let machine = json!({
-        "os": format!("{} {}", std::env::consts::OS, sh("sw_vers", &["-productVersion"]).unwrap_or_default()).trim(),
+        "os": os_label(),
         "arch": std::env::consts::ARCH,
-        "cpu": sh("sysctl", &["-n", "machdep.cpu.brand_string"]),
+        "cpu": cpu_model(),
         "cores": std::thread::available_parallelism().map(|n| n.get()).ok(),
         "memory_gb": sh("sysctl", &["-n", "hw.memsize"]).and_then(|s| s.parse::<f64>().ok()).map(|b| (b / 1e9).round()),
         "emulator": crate::sdk::Sdk::locate().ok().and_then(|s| s.emulator_version().ok()),

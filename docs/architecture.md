@@ -90,4 +90,4 @@ Transitions are validated by `State::can_become`.
 ## Not implemented yet
 
 Downloads that happen without `dorker pull`, automatic test-APK
-discovery, GPU-mode benchmarking, Linux validation, release packaging (Phase 5).
+discovery, GPU-mode benchmarking, Linux arm64 and bare-metal validation, release packaging (Phase 5).
