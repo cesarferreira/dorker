@@ -79,6 +79,28 @@ pub struct Instance {
     pub pid: Option<u32>,
     pub state: State,
     pub created_at: u64,
+    #[serde(default = "default_device")]
+    pub device: String,
+    #[serde(default = "default_width")]
+    pub width: u32,
+    #[serde(default = "default_height")]
+    pub height: u32,
+    /// Image this instance was cloned from (`None` for base `android:<api>` runs).
+    #[serde(default)]
+    pub image_id: Option<String>,
+    /// Snapshot to restore at start, if the image has one.
+    #[serde(default)]
+    pub snapshot: Option<String>,
+}
+
+fn default_device() -> String {
+    "pixel_7".into()
+}
+fn default_width() -> u32 {
+    1080
+}
+fn default_height() -> u32 {
+    2400
 }
 
 impl Instance {
@@ -137,7 +159,7 @@ impl Store {
     }
 
     pub fn at(root: PathBuf) -> Result<Self> {
-        for sub in ["instances", "locks"] {
+        for sub in ["instances", "images", "locks"] {
             fs::create_dir_all(root.join(sub))
                 .with_context(|| format!("creating {}", root.join(sub).display()))?;
         }
@@ -146,6 +168,10 @@ impl Store {
 
     pub fn instances_dir(&self) -> PathBuf {
         self.root.join("instances")
+    }
+
+    pub fn images_dir(&self) -> PathBuf {
+        self.root.join("images")
     }
 
     pub fn instance_dir(&self, id: &str) -> PathBuf {
@@ -288,6 +314,11 @@ mod tests {
             pid: None,
             state: State::Created,
             created_at: 1,
+            device: "pixel_7".into(),
+            width: 1080,
+            height: 2400,
+            image_id: None,
+            snapshot: None,
         }
     }
 

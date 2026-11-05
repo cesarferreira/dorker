@@ -1,0 +1,17 @@
+FROM android:35
+
+MEMORY 2GB
+CPUS 2
+DISK 4GB
+
+DEVICE pixel_7
+RESOLUTION 1080x2400
+HEADLESS true
+
+INSTALL ./sample.apk
+
+SETTING window_animation_scale 0
+SETTING transition_animation_scale 0
+SETTING animator_duration_scale 0
+
+SNAPSHOT ready

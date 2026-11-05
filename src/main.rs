@@ -1,5 +1,8 @@
+mod build;
 mod commands;
 mod doctor;
+mod dorkerfile;
+mod images;
 mod runtime;
 mod sdk;
 mod store;
@@ -29,6 +32,31 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Build an image from a Dorkerfile
+    Build {
+        /// Build context directory
+        #[arg(default_value = ".")]
+        context: std::path::PathBuf,
+        /// Dorkerfile path (default: <context>/Dorkerfile)
+        #[arg(short, long)]
+        file: Option<std::path::PathBuf>,
+        /// Name and optionally tag the image, e.g. myapp:latest
+        #[arg(short, long)]
+        tag: Option<String>,
+        /// Rebuild even if an identical image is cached
+        #[arg(long)]
+        no_cache: bool,
+        /// Seconds to wait for Android to boot
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+    },
+    /// List images
+    Images {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove an image
+    Rmi { image: String },
     /// Launch an instance from an image (e.g. android:35)
     Run {
         image: String,
@@ -41,12 +69,12 @@ enum Command {
         /// Remove the instance when it stops
         #[arg(long)]
         rm: bool,
-        /// Guest RAM, e.g. 2GB or 2048MB
-        #[arg(long, default_value = "2GB")]
-        memory: String,
-        /// Virtual CPU count
-        #[arg(long, default_value_t = 2)]
-        cpus: u32,
+        /// Guest RAM, e.g. 2GB (overriding an image's value disables its snapshot)
+        #[arg(long)]
+        memory: Option<String>,
+        /// Virtual CPU count (overriding an image's value disables its snapshot)
+        #[arg(long)]
+        cpus: Option<u32>,
         /// Emulator console port (even, 5554..=5680); ADB uses port+1
         #[arg(long)]
         adb_port: Option<u16>,
@@ -87,10 +115,14 @@ enum Command {
         follow: bool,
     },
     /// Stop a running instance
-    Stop { instance: String },
+    Stop {
+        #[arg(required = true)]
+        instances: Vec<String>,
+    },
     /// Remove an instance and its data
     Rm {
-        instance: String,
+        #[arg(required = true)]
+        instances: Vec<String>,
         /// Stop the instance first if it is running
         #[arg(short, long)]
         force: bool,
@@ -130,12 +162,27 @@ fn run(cli: Cli) -> Result<i32> {
             adb_port,
             timeout,
         }),
+        Command::Build {
+            context,
+            file,
+            tag,
+            no_cache,
+            timeout,
+        } => build::build(build::BuildArgs {
+            file,
+            tag,
+            context,
+            timeout,
+            no_cache,
+        }),
+        Command::Images { json } => commands::images(json),
+        Command::Rmi { image } => commands::rmi(&image),
         Command::Ps { all, json } => commands::ps(all, json),
         Command::Exec { instance, command } => commands::exec(&instance, &command),
         Command::Install { instance, apk } => commands::install(&instance, &apk),
         Command::Screenshot { instance, output } => commands::screenshot(&instance, &output),
         Command::Logs { instance, follow } => commands::logs(&instance, follow),
-        Command::Stop { instance } => commands::stop(&instance),
-        Command::Rm { instance, force } => commands::rm(&instance, force),
+        Command::Stop { instances } => commands::each(&instances, commands::stop),
+        Command::Rm { instances, force } => commands::each(&instances, |i| commands::rm(i, force)),
     }
 }

@@ -9,6 +9,22 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// Every instance uses the same AVD name: the emulator refuses to restore a
+/// snapshot into an AVD with a different identity ("different AVD configuration").
+/// Isolation comes from the private `ANDROID_AVD_HOME` directory instead.
+pub const AVD_NAME: &str = "dorker";
+
+/// Set by Ctrl-C; long operations poll it and clean up.
+pub static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn install_interrupt_handler() {
+    let _ = ctrlc::set_handler(|| INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst));
+}
+
+pub fn interrupted() -> bool {
+    INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 pub const FIRST_PORT: u16 = 5554;
 pub const LAST_PORT: u16 = 5680;
 
@@ -16,15 +32,16 @@ pub const LAST_PORT: u16 = 5680;
 
 /// Render the AVD `config.ini` for an instance. Pure, so it is unit-tested.
 pub fn render_avd_config(inst: &Instance, image: &SystemImage) -> String {
-    let (w, h, density) = (1080, 2400, 420);
+    let (w, h) = (inst.width, inst.height);
+    let density = 420;
     let gpu_mode = if inst.headless {
         "swiftshader_indirect"
     } else {
         "auto"
     };
     let lines = [
-        format!("AvdId=dorker-{}", inst.id),
-        format!("avd.ini.displayname=dorker {}", inst.name),
+        format!("AvdId={AVD_NAME}"),
+        format!("avd.ini.displayname={AVD_NAME}"),
         "avd.ini.encoding=UTF-8".to_string(),
         format!("abi.type={}", image.abi),
         format!(
@@ -38,7 +55,7 @@ pub fn render_avd_config(inst: &Instance, image: &SystemImage) -> String {
         format!("hw.cpu.ncore={}", inst.cpus),
         format!("hw.ramSize={}", inst.memory_mb),
         format!("disk.dataPartition.size={}M", inst.disk_mb),
-        "hw.device.name=pixel_7".to_string(),
+        format!("hw.device.name={}", inst.device),
         "hw.device.manufacturer=Google".to_string(),
         format!("hw.lcd.width={w}"),
         format!("hw.lcd.height={h}"),
@@ -52,7 +69,7 @@ pub fn render_avd_config(inst: &Instance, image: &SystemImage) -> String {
         format!("tag.id={}", image.flavour),
         format!("tag.display={}", image.flavour),
         format!("target=android-{}", image.api),
-        "fastboot.forceColdBoot=yes".to_string(),
+        "fastboot.forceColdBoot=no".to_string(),
     ];
     lines.join("\n") + "\n"
 }
@@ -60,18 +77,56 @@ pub fn render_avd_config(inst: &Instance, image: &SystemImage) -> String {
 /// Create a private AVD home so the emulator never sees or touches `~/.android/avd`.
 pub fn write_avd(store: &Store, inst: &Instance, image: &SystemImage) -> Result<()> {
     let home = store.instance_dir(&inst.id).join("avd");
-    let avd_dir = home.join(format!("dorker-{}.avd", inst.id));
+    let avd_dir = home.join(format!("{AVD_NAME}.avd"));
     std::fs::create_dir_all(&avd_dir)?;
     std::fs::write(avd_dir.join("config.ini"), render_avd_config(inst, image))?;
+    write_avd_ini(&home, image.api)
+}
+
+fn write_avd_ini(home: &Path, api: u32) -> Result<()> {
     std::fs::write(
-        home.join(format!("dorker-{}.ini", inst.id)),
+        home.join(format!("{AVD_NAME}.ini")),
         format!(
             "avd.ini.encoding=UTF-8\npath={}\ntarget=android-{}\n",
-            avd_dir.display(),
-            image.api
+            home.join(format!("{AVD_NAME}.avd")).display(),
+            api
         ),
     )?;
     Ok(())
+}
+
+/// Copy an image's AVD home to a new location using filesystem clones where
+/// available (APFS `cp -c`, btrfs/xfs reflinks), falling back to a plain copy.
+/// Rewrites the `.ini` path so the copy is self-contained.
+pub fn clone_avd_home(src: &Path, dst: &Path, api: u32) -> Result<()> {
+    if dst.exists() {
+        bail!("{} already exists", dst.display());
+    }
+    let attempts: [&[&str]; 2] = if cfg!(target_os = "macos") {
+        [&["-c", "-R"], &["-R"]]
+    } else {
+        [&["-R", "--reflink=auto"], &["-R"]]
+    };
+    let mut copied = false;
+    for flags in attempts {
+        let ok = Command::new("cp")
+            .args(flags)
+            .arg(src)
+            .arg(dst)
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok {
+            copied = true;
+            break;
+        }
+        let _ = std::fs::remove_dir_all(dst);
+    }
+    if !copied {
+        bail!("copying {} to {} failed", src.display(), dst.display());
+    }
+    write_avd_ini(dst, api)
 }
 
 // ---------- ports ----------
@@ -129,7 +184,7 @@ fn ps_info(pid: u32) -> Option<(u32, String)> {
 pub fn is_our_process(inst: &Instance) -> bool {
     let Some(pid) = inst.pid else { return false };
     match ps_info(pid) {
-        Some((_, cmd)) => cmd.contains(&format!("dorker-{}", inst.id)),
+        Some((_, cmd)) => cmd.contains(&format!("-avd {AVD_NAME} -port {}", inst.console_port)),
         None => false,
     }
 }
@@ -187,17 +242,39 @@ pub fn is_ready(sdk: &Sdk, serial: &str) -> bool {
 
 // ---------- start / stop ----------
 
-pub fn spawn_emulator(sdk: &Sdk, store: &Store, inst: &Instance) -> Result<u32> {
+/// How the emulator should come up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BootMode {
+    /// Full boot; never load or save snapshots.
+    Cold,
+    /// Full boot; snapshots can be saved explicitly (used by `build`).
+    ColdSaveable,
+    /// Restore the named snapshot (falls back to a cold boot if it cannot load);
+    /// never saves on exit so the instance copy stays reproducible.
+    Restore(String),
+}
+
+pub fn spawn_emulator(sdk: &Sdk, store: &Store, inst: &Instance, mode: &BootMode) -> Result<u32> {
     let dir = store.instance_dir(&inst.id);
     let log = std::fs::File::create(dir.join("emulator.log"))?;
     let log_err = log.try_clone()?;
 
     let mut cmd = Command::new(sdk.emulator());
-    cmd.arg("-avd")
-        .arg(format!("dorker-{}", inst.id))
+    cmd.args(["-avd", AVD_NAME])
         .args(["-port", &inst.console_port.to_string()])
-        .args(["-no-snapshot", "-no-audio", "-no-boot-anim", "-no-metrics"])
+        .args(["-no-audio", "-no-boot-anim", "-no-metrics"])
         .args(["-netdelay", "none", "-netspeed", "full"]);
+    match mode {
+        BootMode::Cold => {
+            cmd.arg("-no-snapshot");
+        }
+        BootMode::ColdSaveable => {
+            cmd.args(["-no-snapshot-load", "-no-snapshot-save"]);
+        }
+        BootMode::Restore(name) => {
+            cmd.args(["-snapshot", name, "-no-snapshot-save"]);
+        }
+    }
     if inst.headless {
         cmd.args(["-no-window", "-gpu", "swiftshader_indirect"]);
     }
@@ -213,6 +290,13 @@ pub fn spawn_emulator(sdk: &Sdk, store: &Store, inst: &Instance) -> Result<u32> 
         .spawn()
         .with_context(|| format!("starting {}", sdk.emulator().display()))?;
     Ok(child.id())
+}
+
+/// Whether the emulator log shows a snapshot was restored.
+pub fn restored_from_snapshot(store: &Store, inst: &Instance) -> bool {
+    std::fs::read_to_string(store.instance_dir(&inst.id).join("emulator.log"))
+        .map(|t| t.contains("Successfully loaded snapshot"))
+        .unwrap_or(false)
 }
 
 /// Wait for verified readiness. Fails early if the emulator process dies.
@@ -334,6 +418,11 @@ mod tests {
             pid: None,
             state: State::Created,
             created_at: 0,
+            device: "pixel_7".into(),
+            width: 1080,
+            height: 2400,
+            image_id: None,
+            snapshot: None,
         }
     }
 
@@ -368,8 +457,34 @@ mod tests {
         let store = Store::at(d.path().to_path_buf()).unwrap();
         write_avd(&store, &inst(), &image()).unwrap();
         let home = d.path().join("instances/abc123def456/avd");
-        assert!(home.join("dorker-abc123def456.ini").is_file());
-        assert!(home.join("dorker-abc123def456.avd/config.ini").is_file());
+        assert!(home.join("dorker.ini").is_file());
+        assert!(home.join("dorker.avd/config.ini").is_file());
+        let ini = std::fs::read_to_string(home.join("dorker.ini")).unwrap();
+        assert!(ini.contains(&format!("path={}", home.join("dorker.avd").display())));
+    }
+
+    #[test]
+    fn clone_copies_and_repoints_ini() {
+        let d = Dir::new();
+        let src = d.path().join("src");
+        std::fs::create_dir_all(src.join("dorker.avd")).unwrap();
+        std::fs::write(src.join("dorker.avd/userdata.img"), b"data").unwrap();
+        write_avd_ini(&src, 35).unwrap();
+        let dst = d.path().join("dst");
+        clone_avd_home(&src, &dst, 35).unwrap();
+        assert_eq!(
+            std::fs::read(dst.join("dorker.avd/userdata.img")).unwrap(),
+            b"data"
+        );
+        let ini = std::fs::read_to_string(dst.join("dorker.ini")).unwrap();
+        assert!(ini.contains(&dst.display().to_string()));
+        // Mutating the clone never touches the source.
+        std::fs::write(dst.join("dorker.avd/userdata.img"), b"changed").unwrap();
+        assert_eq!(
+            std::fs::read(src.join("dorker.avd/userdata.img")).unwrap(),
+            b"data"
+        );
+        assert!(clone_avd_home(&src, &dst, 35).is_err());
     }
 
     #[test]

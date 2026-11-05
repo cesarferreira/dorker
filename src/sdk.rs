@@ -59,6 +59,29 @@ impl Sdk {
         self.root.join("platform-tools").join("adb")
     }
 
+    /// Emulator version string, e.g. `37.2.12.0`.
+    pub fn emulator_version(&self) -> Result<String> {
+        let out = std::process::Command::new(self.emulator())
+            .arg("-version")
+            .output()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        text.lines()
+            .find_map(|l| l.split("emulator version ").nth(1))
+            .and_then(|v| v.split_whitespace().next())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                anyhow::anyhow!("could not read the emulator version from `emulator -version`")
+            })
+    }
+
+    /// Revision of an installed system image, from its `package.xml`
+    /// (`major.minor.micro`, trailing zero components kept).
+    pub fn system_image_revision(&self, image: &SystemImage) -> Result<String> {
+        let xml = std::fs::read_to_string(self.root.join(&image.sysdir).join("package.xml"))?;
+        parse_revision(&xml)
+            .ok_or_else(|| anyhow::anyhow!("no <revision> in package.xml for {}", image.package))
+    }
+
     /// All installed system images, sorted by API (desc), flavour, abi.
     pub fn system_images(&self) -> Vec<SystemImage> {
         let base = self.root.join("system-images");
@@ -131,6 +154,24 @@ impl Sdk {
             }
         )
     }
+}
+
+/// Extract the first `<revision>` block's major/minor/micro as `a.b.c`.
+pub fn parse_revision(xml: &str) -> Option<String> {
+    let start = xml.find("<revision>")?;
+    let block = &xml[start..start + xml[start..].find("</revision>")?];
+    let part = |tag: &str| -> Option<String> {
+        let open = format!("<{tag}>");
+        let from = block.find(&open)? + open.len();
+        let len = block[from..].find(&format!("</{tag}>"))?;
+        Some(block[from..from + len].trim().to_string())
+    };
+    let major = part("major")?;
+    Some(format!(
+        "{major}.{}.{}",
+        part("minor").unwrap_or_else(|| "0".into()),
+        part("micro").unwrap_or_else(|| "0".into())
+    ))
 }
 
 fn parse_api(s: &str) -> Option<u32> {
@@ -213,6 +254,13 @@ mod tests {
             .resolve(&ImageRef::parse("android:34").unwrap())
             .unwrap_err();
         assert!(err.to_string().contains("sdkmanager"));
+    }
+
+    #[test]
+    fn revision_parsing() {
+        let xml = "<a><revision>\n<major>9</major>\n<minor>2</minor>\n</revision><x><revision><major>1</major></revision></x></a>";
+        assert_eq!(parse_revision(xml).as_deref(), Some("9.2.0"));
+        assert_eq!(parse_revision("<a/>"), None);
     }
 
     #[test]

@@ -4,3 +4,4 @@ Cargo.lock
 *.log
 __pycache__/
 *.pyc
+*.apk

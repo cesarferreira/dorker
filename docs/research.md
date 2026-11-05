@@ -45,20 +45,45 @@ Single runs only; these are not benchmarks. See "Open questions".
 
 ## Emulator interfaces used
 
-- `emulator -avd <name> -port <even> -no-window -no-audio -no-boot-anim -no-metrics -no-snapshot -gpu swiftshader_indirect`
+- `emulator -avd dorker -port <even> -no-window -no-audio -no-boot-anim -no-metrics -gpu swiftshader_indirect`
+  plus `-no-snapshot` (base runs), `-no-snapshot-load -no-snapshot-save` (builds, so
+  the snapshot is saved explicitly) or `-snapshot <name> -no-snapshot-save` (image runs)
 - Readiness: `sys.boot_completed == 1` **and** `pm path android` succeeds
   (not just `adb wait-for-device`).
 - Stop: `adb emu kill`, then `SIGTERM`, then `SIGKILL` to the process group,
   only after verifying the pid's command line names the instance.
 
-## Snapshot and disk-overlay feasibility
+## Snapshot and disk-overlay feasibility (experimentally established)
 
-Not yet experimented. The emulator advertises `-snapshot`, `-no-snapshot-save`,
-`-no-snapshot-load`, `-force-snapshot-load`, `-snapshot-list`, `-snapstorage`
-and `-check-snapshot-loadable <name>` (from `emulator -help`). The last one is
-the likely compatibility check for Phase 3. Whether a snapshot can be copied to
-a new instance with a different AVD id, port or userdata is **unverified** and
-decides the Phase 3 design. v0.1 uses `-no-snapshot` (always cold boot).
+Setup: seed AVD booted cold, state changed, `adb emu avd snapshot save ready`,
+emulator killed; the AVD directory was then copied and booted elsewhere.
+
+| Experiment | Result |
+|---|---|
+| Restore into a copy with the **same AVD name**, different directory and different console port | Works. `Successfully loaded snapshot 'ready' using 1186 ms`; verified-ready in 4.0 s vs 14-19 s cold. RAM state and userdata survive |
+| Restore into a copy whose AVD was **renamed** (`AvdId`, `.ini`, directory) | Fails: `Failed to load snapshot, because 'different AVD configuration'` |
+| A failed restore | The emulator **deletes the snapshot** it could not load (and exits with `-force-snapshot-load`) |
+| `fastboot.forceColdBoot = yes` in `config.ini` | Silently turns every boot into `-no-snapshot`. The emulator rewrites `config.ini` with spaces around `=`, so edits must tolerate both forms |
+| Snapshot size | About 2 GB for a 2 GB guest (`ram.bin`); an image is about 3.3 GB logical |
+| Copying an image to an instance | `cp -c -R` (APFS clone) is used, falling back to a plain copy |
+
+Consequences for the design:
+
+1. Every dorker instance uses the AVD name `dorker`. Isolation comes from a private
+   `ANDROID_AVD_HOME` per instance, not from unique AVD names.
+2. Instances restore from **their own clone** of the image, never from the image,
+   because a failed restore deletes the snapshot.
+3. Anything the emulator compares must match the image: memory, CPUs, display,
+   system-image revision and emulator version. dorker checks these before
+   restoring and cold boots with a note when they differ, so `--memory`/`--cpus`
+   overrides disable the snapshot.
+4. Instances start with `-snapshot <name> -no-snapshot-save`, so the clone is never
+   mutated by the snapshot machinery.
+
+Measured with `dorker run` on this machine (API 35 `google_apis`, 2 GB, 2 CPUs,
+`swiftshader_indirect`): snapshot restore 2.3-3.8 s to verified readiness across
+5 runs; cold boot 14.4-19.7 s across 6 runs. These are ad hoc runs, not a
+benchmark.
 
 ## Licensing
 
@@ -70,7 +95,8 @@ decides the Phase 3 design. v0.1 uses `-no-snapshot` (always cold boot).
 
 ## Technical risks
 
-1. **Snapshot portability** (see above), the main performance lever.
+1. **Snapshot compatibility** is strict (see above): any emulator or system-image
+   update invalidates existing images' snapshots. dorker falls back to cold boot.
 2. **Hand-written AVD `config.ini`**: not a stable public interface. Keys were
    copied from a working AVD and the instance boots, but emulator updates may
    change required keys. Mitigation: boot test in CI.
@@ -85,3 +111,5 @@ decides the Phase 3 design. v0.1 uses `-no-snapshot` (always cold boot).
 - Host RAM and idle CPU per instance (needs `dorker bench`).
 - `-gpu host` vs `swiftshader_indirect` boot time and screenshot correctness.
 - Whether `-read-only` AVD sharing could replace per-instance copies.
+- Whether a snapshot is portable across machines (almost certainly not: it
+  embeds host-specific state), which limits any future image registry.

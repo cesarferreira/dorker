@@ -79,13 +79,26 @@ dorker stop test
 dorker rm test
 ```
 
+### Build an image
+
+```bash
+dorker build -t myapp:latest .          # reads ./Dorkerfile, writes Dorkerfile.lock
+dorker images
+dorker run -d --name t1 myapp:latest    # restores the snapshot in a few seconds
+dorker rm -f t1
+```
+
+See [docs/dorkerfile.md](docs/dorkerfile.md) and [examples/basic](examples/basic).
+
 Each instance gets its own private AVD under `~/.dorker` (override with
 `DORKER_HOME`). Your existing AVDs are never touched. `dorker run --rm` removes the
-instance when it stops. `ps` and `doctor` accept `--json`.
+instance when it stops. `ps`, `images` and `doctor` accept `--json`.
 
-Not yet implemented: `Dorkerfile` and `dorker build`, snapshots, `dorker test`,
-`dorker bench`. See [docs/architecture.md](docs/architecture.md) and
-[docs/research.md](docs/research.md).
+Measured on an M-series Mac, API 35, 2GB: cold boot 14-20s, snapshot restore
+2-4s. These are ad hoc runs; see [docs/research.md](docs/research.md).
+
+Not yet implemented: `dorker test`, `dorker bench`. See
+[docs/architecture.md](docs/architecture.md).
 
 <a id="development"></a>
 ## Development
