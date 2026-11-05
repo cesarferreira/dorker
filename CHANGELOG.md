@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.5] - 2026-11-05
+
+### 🚀 Features
+
+- Add dorker versions to list the Android versions you can use
+- Build and run offer to install a missing system image
+- Dorker run with no image builds and runs the Dorkerfile in this folder
+- Add dorker prune to reclaim disk from unused images and stopped instances
+- Add dorker ls to show images, instances and disk use
+- Colour ls, ps, images and prune output
+- Run --logs streams device log; instrumentation example gets a launcher app and host GPU
+- Default to host GPU on macOS
+
+### 🐛 Bug Fixes
+
+- Dorker pull reads the published package names instead of guessing them
 ## [0.1.4] - 2026-11-05
 
 ### 🚀 Features
