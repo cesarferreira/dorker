@@ -303,6 +303,8 @@ pub fn build(a: BuildArgs) -> Result<i32> {
         meta = images::find(&store, &id)?;
         eprintln!("Using cached image {id} (identical Dorkerfile, APKs and toolchain)");
     } else {
+        // A build holds the guest's RAM image (the snapshot) plus provisioned userdata.
+        runtime::ensure_free_space(&store.root(), df.memory_mb * 1024 * 1024, "build an image")?;
         runtime::install_interrupt_handler();
         build_new(&sdk, &store, &sys, &df, &apks, &mut meta, a.timeout)
             .map_err(errors::with(errors::BUILD))?;

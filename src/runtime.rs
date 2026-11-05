@@ -108,25 +108,96 @@ pub fn clone_avd_home(src: &Path, dst: &Path, api: u32) -> Result<()> {
         [&["-R", "--reflink=auto"], &["-R"]]
     };
     let mut copied = false;
+    let mut last_error = String::new();
     for flags in attempts {
-        let ok = Command::new("cp")
-            .args(flags)
-            .arg(src)
-            .arg(dst)
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if ok {
-            copied = true;
-            break;
+        let out = Command::new("cp").args(flags).arg(src).arg(dst).output();
+        match out {
+            Ok(o) if o.status.success() => {
+                copied = true;
+                break;
+            }
+            Ok(o) => last_error = String::from_utf8_lossy(&o.stderr).trim().to_string(),
+            Err(e) => last_error = e.to_string(),
         }
+        // Never leave a partial copy behind (it would also eat the remaining space).
         let _ = std::fs::remove_dir_all(dst);
     }
     if !copied {
-        bail!("copying {} to {} failed", src.display(), dst.display());
+        bail!(
+            "copying {} to {} failed: {}",
+            src.display(),
+            dst.display(),
+            if last_error.is_empty() {
+                "unknown error".to_string()
+            } else {
+                last_error
+            }
+        );
     }
     write_avd_ini(dst, api)
+}
+
+// ---------- disk space ----------
+
+/// Free space (bytes) on the filesystem holding `path`, from POSIX `df -Pk`.
+pub fn free_space_bytes(path: &Path) -> Option<u64> {
+    let out = Command::new("df").args(["-Pk"]).arg(path).output().ok()?;
+    out.status
+        .success()
+        .then(|| parse_df_available(&String::from_utf8_lossy(&out.stdout)))
+        .flatten()
+}
+
+/// Parse the "Available" column (KiB) of `df -Pk` output into bytes.
+pub fn parse_df_available(out: &str) -> Option<u64> {
+    // Header, then one data row: Filesystem 1024-blocks Used Available Capacity Mounted-on.
+    // The filesystem name can contain spaces, so count columns from the right.
+    let row = out.lines().nth(1)?;
+    let cols: Vec<&str> = row.split_whitespace().collect();
+    let available = cols.get(cols.len().checked_sub(3)?)?;
+    available.parse::<u64>().ok().map(|kb| kb * 1024)
+}
+
+const MIB: u64 = 1024 * 1024;
+
+/// Minimum free space required before starting work, in bytes. Overridable with
+/// `DORKER_MIN_FREE_MB` (an emulator needs room for userdata and a snapshot).
+pub fn min_free_bytes() -> u64 {
+    std::env::var("DORKER_MIN_FREE_MB")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map_or(2048 * MIB, |mb| mb * MIB)
+}
+
+/// Fail early, with a clear message, when the state directory's filesystem is too full.
+/// `extra_bytes` is space needed on top of the minimum (e.g. a full copy of an image).
+pub fn ensure_free_space(dir: &Path, extra_bytes: u64, what: &str) -> Result<()> {
+    let needed = min_free_bytes() + extra_bytes;
+    let Some(free) = free_space_bytes(dir) else {
+        crate::log::vlog!(
+            "could not determine free space for {}; skipping the check",
+            dir.display()
+        );
+        return Ok(());
+    };
+    crate::log::vlog!(
+        "disk check for {what}: {} MiB free, {} MiB needed on {}",
+        free / MIB,
+        needed / MIB,
+        dir.display()
+    );
+    if free < needed {
+        return Err(crate::errors::with(crate::errors::CONFLICT)(
+            anyhow::anyhow!(
+                "not enough free disk space to {what}: {} MB free on the filesystem holding {}, need at least {} MB\n\n\
+             Free some space, point DORKER_HOME at a larger disk, or lower the requirement with DORKER_MIN_FREE_MB.",
+                free / MIB,
+                dir.display(),
+                needed / MIB
+            ),
+        ));
+    }
+    Ok(())
 }
 
 // ---------- ports ----------
@@ -800,6 +871,34 @@ mod tests {
         assert_eq!(process_state(&a), ProcState::Dead);
         a.pid = None;
         assert_eq!(process_state(&a), ProcState::Dead);
+    }
+
+    #[test]
+    fn df_parsing() {
+        let linux = "Filesystem     1024-blocks      Used Available Capacity Mounted on\n/dev/root        225443844 105968812 119458648      47% /\n";
+        assert_eq!(parse_df_available(linux), Some(119458648 * 1024));
+        // Filesystem names with spaces (network mounts) must not shift the columns.
+        let spaced = "Filesystem 1024-blocks Used Available Capacity Mounted on\nmy share:/a b 1000 400 600 40% /mnt/x\n";
+        assert_eq!(parse_df_available(spaced), Some(600 * 1024));
+        assert_eq!(parse_df_available("garbage"), None);
+        assert_eq!(parse_df_available(""), None);
+    }
+
+    #[test]
+    fn free_space_check_uses_the_requirement() {
+        let d = Dir::new();
+        // The real filesystem has some space; an absurd extra requirement must fail with
+        // the resource-conflict exit code and name the numbers.
+        let err = ensure_free_space(d.path(), u64::MAX / 4, "run an instance").unwrap_err();
+        assert_eq!(crate::errors::code_of(&err), crate::errors::CONFLICT);
+        assert!(
+            err.to_string().contains("not enough free disk space"),
+            "{err}"
+        );
+        assert!(
+            ensure_free_space(d.path(), 0, "run an instance").is_ok()
+                || free_space_bytes(d.path()).unwrap_or(u64::MAX) < min_free_bytes()
+        );
     }
 
     #[test]

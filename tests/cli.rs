@@ -128,6 +128,29 @@ fn invalid_arguments_are_exit_code_2() {
 }
 
 #[test]
+fn insufficient_disk_space_is_a_resource_conflict_before_anything_is_created() {
+    let e = Env::new("disk");
+    // An absurd requirement makes the preflight fail on any machine, with no SDK needed.
+    let o = e
+        .cmd(&["run", "-d", "android:35"])
+        .env("DORKER_MIN_FREE_MB", "999999999999")
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 8, "{}", text(&o.stderr));
+    let err = text(&o.stderr);
+    assert!(err.contains("not enough free disk space"), "{err}");
+    assert!(
+        err.contains("DORKER_MIN_FREE_MB"),
+        "tells the user how to adjust it: {err}"
+    );
+    assert_eq!(
+        std::fs::read_dir(e.home.join("instances")).unwrap().count(),
+        0,
+        "nothing created"
+    );
+}
+
+#[test]
 fn init_creates_a_parseable_dorkerfile_and_never_overwrites() {
     let e = Env::new("init");
     let dir = e.home.join("proj");

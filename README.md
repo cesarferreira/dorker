@@ -144,7 +144,7 @@ transitions and timings. Each instance also keeps its raw emulator output in
 | 5 | instance failed to start or boot |
 | 6 | adb operation failed |
 | 7 | instrumentation tests failed |
-| 8 | name, port or build conflict |
+| 8 | name, port or build conflict, or not enough free disk space |
 
 `dorker exec` returns the guest command's own exit status.
 

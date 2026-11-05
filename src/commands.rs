@@ -71,6 +71,10 @@ pub struct Started {
 
 /// Create, start and wait for an instance. `force_cold` ignores any snapshot.
 pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
+    // Cheap, SDK-independent check first: an emulator needs room for userdata and
+    // snapshots, and failing here beats the emulator dying halfway through boot.
+    let store = Store::open()?;
+    runtime::ensure_free_space(&store.root(), 0, "run an instance")?;
     let sdk = Sdk::locate().map_err(errors::with(errors::DEPENDENCY))?;
     if !sdk.emulator().is_file() {
         return Err(errors::with(errors::DEPENDENCY)(anyhow::anyhow!(
@@ -78,7 +82,6 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
             sdk.emulator().display()
         )));
     }
-    let store = Store::open()?;
     let cfg = errors::with(errors::CONFIG);
     let dep = errors::with(errors::DEPENDENCY);
 
@@ -133,6 +136,17 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
                 )
             }
         };
+    // Without filesystem clones (anything but APFS here) an instance is a full copy.
+    if let Some(m) = &image_meta {
+        if !cfg!(target_os = "macos") {
+            let (_, allocated) = images::dir_usage(&images::image_dir(&store, &m.id));
+            runtime::ensure_free_space(
+                &store.root(),
+                allocated,
+                "copy the image for a new instance",
+            )?;
+        }
+    }
     if let Some(g) = &a.gpu {
         if image_meta.is_some() {
             return Err(cfg(anyhow::anyhow!(

@@ -179,6 +179,10 @@ impl Store {
         Ok(Self { root })
     }
 
+    pub fn root(&self) -> PathBuf {
+        self.root.clone()
+    }
+
     pub fn instances_dir(&self) -> PathBuf {
         self.root.join("instances")
     }
