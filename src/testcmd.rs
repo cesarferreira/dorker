@@ -112,7 +112,25 @@ fn safe(s: &str, extra: &str) -> bool {
         })
 }
 
-pub fn run(key: &str, runner: &str, class: Option<&str>, timeout: u64) -> Result<i32> {
+/// A test run as JSON, for `dorker test --json` and the MCP server.
+pub fn report_json(r: &Report, timed_out: bool, logdir: &std::path::Path) -> serde_json::Value {
+    serde_json::json!({
+        "ok": r.ok() && !timed_out,
+        "passed": r.passed,
+        "failed": r.failed,
+        "errors": r.errors,
+        "ignored": r.ignored,
+        "failures": r.failures.iter().map(|f| serde_json::json!({
+            "class": f.class, "test": f.test, "stack": f.stack,
+        })).collect::<Vec<_>>(),
+        "timed_out": timed_out,
+        "crashed": r.crashed,
+        "failed_to_start": r.failed_to_start,
+        "log_dir": logdir,
+    })
+}
+
+pub fn run(key: &str, runner: &str, class: Option<&str>, timeout: u64, json: bool) -> Result<i32> {
     let cfg = errors::with(errors::CONFIG);
     if !safe(runner, "") || !runner.contains('/') {
         return Err(cfg(anyhow::anyhow!(
@@ -190,12 +208,19 @@ pub fn run(key: &str, runner: &str, class: Option<&str>, timeout: u64) -> Result
 
     // Some failures (e.g. "target has no code") arrive on stderr; parse both.
     let report = parse(&format!("{stdout}{stderr}"));
-    println!(
-        "Tests: {} passed, {} failed, {} errors, {} ignored",
-        report.passed, report.failed, report.errors, report.ignored
-    );
-    for f in &report.failures {
-        println!("\nFAILED {}#{}\n{}", f.class, f.test, f.stack.trim_end());
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report_json(&report, timed_out, &logdir))?
+        );
+    } else {
+        println!(
+            "Tests: {} passed, {} failed, {} errors, {} ignored",
+            report.passed, report.failed, report.errors, report.ignored
+        );
+        for f in &report.failures {
+            println!("\nFAILED {}#{}\n{}", f.class, f.test, f.stack.trim_end());
+        }
     }
     if timed_out {
         eprintln!("error: instrumentation did not finish within {timeout}s");
@@ -223,7 +248,9 @@ pub fn run(key: &str, runner: &str, class: Option<&str>, timeout: u64) -> Result
         eprintln!("error: the instrumentation process crashed");
     }
     if report.ok() && !timed_out {
-        println!("\nPASSED (logs: {})", logdir.display());
+        if !json {
+            println!("\nPASSED (logs: {})", logdir.display());
+        }
         Ok(0)
     } else {
         eprintln!("\nFAILED. Logs preserved in {}", logdir.display());

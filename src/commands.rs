@@ -20,6 +20,32 @@ pub struct RunArgs {
     pub timeout: u64,
     /// GPU mode for base `android:<api>` runs; built images use their own.
     pub gpu: Option<String>,
+    /// Print the started instance as JSON on stdout (requires `detach`).
+    pub json: bool,
+}
+
+/// An instance as machine-readable JSON, for `run --json`, `start --json` and the MCP server.
+pub fn instance_json(
+    inst: &Instance,
+    restored: Option<bool>,
+    ready_secs: Option<f64>,
+    launched: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": inst.id,
+        "name": inst.name,
+        "image": inst.image,
+        "status": inst.state.as_str(),
+        "serial": inst.serial(),
+        "adb_port": inst.adb_port(),
+        "pid": inst.pid,
+        "memory_mb": inst.memory_mb,
+        "cpus": inst.cpus,
+        "gpu": inst.gpu,
+        "boot": restored.map(|r| if r { "snapshot" } else { "cold" }),
+        "ready_secs": ready_secs.map(|s| (s * 100.0).round() / 100.0),
+        "launched": launched,
+    })
 }
 
 fn host_cpus() -> u32 {
@@ -362,23 +388,45 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
 }
 
 pub fn run(a: RunArgs) -> Result<i32> {
+    if a.json && !a.detach {
+        return Err(errors::with(errors::CONFIG)(anyhow::anyhow!(
+            "--json needs --detach: a foreground run never returns a result to print"
+        )));
+    }
     let Started {
         sdk,
         store,
         mut inst,
         image,
-        ..
+        ready_secs,
+        restored,
     } = start(&a, false)?;
 
+    let mut launched = None;
     if let Some(pkg) = image.as_ref().and_then(|m| m.launch.as_ref()) {
         match runtime::launch_app(&sdk, &inst.serial(), pkg) {
-            Ok(()) => eprintln!("Launched {pkg}"),
+            Ok(()) => {
+                eprintln!("Launched {pkg}");
+                launched = Some(pkg.clone());
+            }
             Err(e) => eprintln!("warning: {e:#}"),
         }
     }
 
     if a.detach {
-        println!("{}", inst.id);
+        if a.json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&instance_json(
+                    &inst,
+                    Some(restored),
+                    Some(ready_secs),
+                    launched.as_deref()
+                ))?
+            );
+        } else {
+            println!("{}", inst.id);
+        }
         return Ok(0);
     }
 
@@ -396,7 +444,7 @@ pub fn run(a: RunArgs) -> Result<i32> {
 /// Restart a stopped, failed or crashed instance. It cold boots from the
 /// instance's own userdata, so files it wrote earlier are still there; the image's
 /// snapshot is deliberately not restored because it would roll that data back.
-pub fn start_existing(key: &str, timeout: u64) -> Result<i32> {
+pub fn start_existing(key: &str, timeout: u64, json: bool) -> Result<i32> {
     let sdk = Sdk::locate().map_err(errors::with(errors::DEPENDENCY))?;
     let store = Store::open()?;
     let found = store.find(key)?;
@@ -442,8 +490,16 @@ pub fn start_existing(key: &str, timeout: u64) -> Result<i32> {
         || eprintln!("  Android is booting..."),
     )
     .map_err(errors::with(errors::STARTUP))?;
-    eprintln!("Ready in {:.1}s (cold boot)", t0.elapsed().as_secs_f64());
-    println!("{}", inst.id);
+    let secs = t0.elapsed().as_secs_f64();
+    eprintln!("Ready in {secs:.1}s (cold boot)");
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&instance_json(&inst, Some(false), Some(secs), None))?
+        );
+    } else {
+        println!("{}", inst.id);
+    }
     Ok(0)
 }
 
@@ -630,29 +686,51 @@ fn code_of(status: std::process::ExitStatus) -> i32 {
     status.code().unwrap_or(1)
 }
 
-pub fn exec(key: &str, command: &[String]) -> Result<i32> {
+pub fn exec(key: &str, command: &[String], json: bool) -> Result<i32> {
     let (sdk, inst) = ready_instance(key)?;
-    let status = runtime::adb(&sdk, &inst.serial())
-        .args(["shell", &command.join(" ")])
-        .status()
-        .context("running adb")?;
-    Ok(code_of(status))
+    let mut cmd = runtime::adb(&sdk, &inst.serial());
+    cmd.args(["shell", &command.join(" ")]);
+    if json {
+        let out = cmd.output().context("running adb")?;
+        let code = code_of(out.status);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "exit_code": code,
+                "stdout": String::from_utf8_lossy(&out.stdout),
+                "stderr": String::from_utf8_lossy(&out.stderr),
+            }))?
+        );
+        return Ok(code);
+    }
+    Ok(code_of(cmd.status().context("running adb")?))
 }
 
-pub fn install(key: &str, apk: &Path) -> Result<i32> {
+pub fn install(key: &str, apk: &Path, json: bool) -> Result<i32> {
     if !apk.is_file() {
         bail!("APK not found: {}", apk.display());
     }
     let (sdk, inst) = ready_instance(key)?;
-    let status = runtime::adb(&sdk, &inst.serial())
-        .args(["install", "-r"])
-        .arg(apk)
-        .status()
-        .context("running adb")?;
+    let mut cmd = runtime::adb(&sdk, &inst.serial());
+    cmd.args(["install", "-r"]).arg(apk);
+    if json {
+        let out = cmd.output().context("running adb")?;
+        let ok =
+            out.status.success() && !String::from_utf8_lossy(&out.stdout).contains("Failure [");
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": ok,
+                "output": format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)).trim(),
+            }))?
+        );
+        return Ok(if ok { 0 } else { errors::ADB });
+    }
+    let status = cmd.status().context("running adb")?;
     Ok(if status.success() { 0 } else { errors::ADB })
 }
 
-pub fn screenshot(key: &str, output: &Path) -> Result<i32> {
+pub fn screenshot(key: &str, output: &Path, json: bool) -> Result<i32> {
     let (sdk, inst) = ready_instance(key)?;
     let out = runtime::adb(&sdk, &inst.serial())
         .args(["exec-out", "screencap", "-p"])
@@ -666,15 +744,27 @@ pub fn screenshot(key: &str, output: &Path) -> Result<i32> {
     }
     std::fs::write(output, &out.stdout).with_context(|| format!("writing {}", output.display()))?;
     eprintln!("Saved {} ({} bytes)", output.display(), out.stdout.len());
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &serde_json::json!({ "path": output, "bytes": out.stdout.len() })
+            )?
+        );
+    }
     Ok(0)
 }
 
-pub fn logs(key: &str, follow: bool) -> Result<i32> {
+pub fn logs(key: &str, follow: bool, tail: Option<u32>) -> Result<i32> {
     let (sdk, inst) = ready_instance(key)?;
     let mut cmd = runtime::adb(&sdk, &inst.serial());
     cmd.arg("logcat");
     if !follow {
         cmd.arg("-d");
+    }
+    if let Some(n) = tail {
+        // `-t N` prints the last N lines and exits.
+        cmd.args(["-t", &n.to_string()]);
     }
     Ok(code_of(cmd.status().context("running adb")?))
 }

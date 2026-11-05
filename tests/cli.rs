@@ -150,6 +150,145 @@ fn insufficient_disk_space_is_a_resource_conflict_before_anything_is_created() {
     );
 }
 
+/// Send newline-delimited JSON-RPC messages to `dorker mcp`, close stdin, return the responses by id.
+fn mcp_session(
+    e: &Env,
+    messages: &[serde_json::Value],
+    raw_extra: &[&str],
+) -> Vec<serde_json::Value> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = e
+        .cmd(&["mcp"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        for m in messages {
+            writeln!(stdin, "{m}").unwrap();
+        }
+        for r in raw_extra {
+            writeln!(stdin, "{r}").unwrap();
+        }
+    }
+    drop(child.stdin.take()); // EOF: the server answers in-flight calls, then exits
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(
+        code(&Output {
+            status: out.status,
+            stdout: vec![],
+            stderr: vec![]
+        }),
+        0,
+        "server exits cleanly on EOF"
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| {
+            serde_json::from_str(l)
+                .unwrap_or_else(|e| panic!("stdout must carry only JSON-RPC, got {l:?}: {e}"))
+        })
+        .collect()
+}
+
+#[test]
+fn mcp_server_speaks_the_protocol_over_stdio() {
+    use serde_json::json;
+    let e = Env::new("mcp");
+    let rpc = |id: u32, method: &str, params: serde_json::Value| json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+    let msgs = [
+        rpc(
+            1,
+            "initialize",
+            json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}}),
+        ),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        rpc(2, "tools/list", json!({})),
+        rpc(
+            3,
+            "tools/call",
+            json!({"name": "dorker_ps", "arguments": {"all": true}}),
+        ),
+        rpc(
+            4,
+            "tools/call",
+            json!({"name": "dorker_run", "arguments": {}}),
+        ),
+        rpc(
+            5,
+            "tools/call",
+            json!({"name": "dorker_exec", "arguments": {"instance": "nope", "command": "ls"}}),
+        ),
+        rpc(
+            6,
+            "tools/call",
+            json!({"name": "dorker_doctor", "arguments": {}}),
+        ),
+        rpc(7, "no/such/method", json!({})),
+    ];
+    let out = mcp_session(&e, &msgs, &["this is not json"]);
+    let by_id = |id: u64| {
+        out.iter()
+            .find(|m| m["id"] == id)
+            .unwrap_or_else(|| panic!("no response for id {id}: {out:?}"))
+    };
+
+    assert_eq!(by_id(1)["result"]["protocolVersion"], "2025-06-18");
+    assert_eq!(by_id(1)["result"]["serverInfo"]["name"], "dorker");
+    let tools = by_id(2)["result"]["tools"].as_array().unwrap().clone();
+    assert!(tools.len() >= 12, "{} tools", tools.len());
+    // No response to the notification, and exactly one per request.
+    assert!(out.iter().filter(|m| m["id"].is_u64()).count() == 7);
+
+    // dorker_ps: structured {"instances": []} on an empty store.
+    assert_eq!(by_id(3)["result"]["isError"], false);
+    assert_eq!(
+        by_id(3)["result"]["structuredContent"]["instances"],
+        json!([])
+    );
+    // Missing argument: a tool error the model can read, not a protocol error.
+    assert_eq!(by_id(4)["result"]["isError"], true);
+    assert!(
+        by_id(4)["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("missing required argument `image`")
+    );
+    // Unknown instance: the CLI's own error comes back as a tool error.
+    assert_eq!(by_id(5)["result"]["isError"], true);
+    assert!(
+        by_id(5)["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("no such instance")
+    );
+    // doctor reports problems inside the JSON (no SDK needed to get an answer).
+    assert!(by_id(6)["result"]["structuredContent"]["ok"].is_boolean());
+    assert_eq!(by_id(7)["error"]["code"], -32601);
+    // The garbage line produced a parse error with a null id, and did not kill the server.
+    assert!(
+        out.iter()
+            .any(|m| m["id"].is_null() && m["error"]["code"] == -32700),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn json_flags_report_failures_as_json_or_plain_errors() {
+    let e = Env::new("jsonflags");
+    // run --json without --detach is a configuration error, before anything starts.
+    let o = e.run(&["run", "--json", "android:35"]);
+    assert_eq!(code(&o), 2, "{}", text(&o.stderr));
+    assert!(text(&o.stderr).contains("--json needs --detach"));
+    // exec on an unknown instance is a plain error (no JSON on stdout).
+    let o = e.run(&["exec", "--json", "nope", "ls"]);
+    assert_eq!(code(&o), 1);
+    assert!(text(&o.stdout).trim().is_empty());
+}
+
 #[test]
 fn init_creates_a_parseable_dorkerfile_and_never_overwrites() {
     let e = Env::new("init");
@@ -312,4 +451,149 @@ fn failed_build_leaves_nothing_behind() {
     let images: Vec<_> = std::fs::read_dir(e.home.join("images")).unwrap().collect();
     assert!(images.is_empty(), "no partial image published");
     assert!(!ctx.join("Dorkerfile.lock").exists());
+}
+
+/// A sequential MCP client: send one request, read until its response arrives.
+struct McpClient {
+    child: std::process::Child,
+    reader: std::io::BufReader<std::process::ChildStdout>,
+    next_id: u64,
+}
+
+impl McpClient {
+    fn start(e: &Env) -> Self {
+        use std::process::Stdio;
+        let mut child = e
+            .cmd(&["mcp"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let reader = std::io::BufReader::new(child.stdout.take().unwrap());
+        McpClient {
+            child,
+            reader,
+            next_id: 0,
+        }
+    }
+
+    fn call(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
+        use std::io::{BufRead, Write};
+        self.next_id += 1;
+        let id = self.next_id;
+        let msg =
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        writeln!(self.child.stdin.as_mut().unwrap(), "{msg}").unwrap();
+        loop {
+            let mut line = String::new();
+            assert!(
+                self.reader.read_line(&mut line).unwrap() > 0,
+                "server closed stdout"
+            );
+            let v: serde_json::Value =
+                serde_json::from_str(&line).expect("stdout carries only JSON-RPC");
+            if v["id"] == id {
+                return v;
+            }
+        }
+    }
+
+    fn tool(&mut self, name: &str, args: serde_json::Value) -> serde_json::Value {
+        self.call(
+            "tools/call",
+            serde_json::json!({"name": name, "arguments": args}),
+        )["result"]
+            .clone()
+    }
+}
+
+impl Drop for McpClient {
+    fn drop(&mut self) {
+        drop(self.child.stdin.take());
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+#[ignore = "boots real emulators; run with --ignored"]
+fn mcp_agent_workflow_against_a_real_emulator() {
+    use serde_json::json;
+    let e = Env::new("mcp-e2e");
+    let ctx = example_apks();
+    let mut c = McpClient::start(&e);
+    c.call("initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "e2e", "version": "0"}}));
+
+    let built = c.tool(
+        "dorker_build",
+        json!({"context": ctx.to_str().unwrap(), "tag": "mcp:e2e"}),
+    );
+    assert_eq!(built["isError"], false, "{built}");
+    let run = c.tool("dorker_run", json!({"image": "mcp:e2e", "name": "agent"}));
+    assert_eq!(run["isError"], false, "{run}");
+    assert_eq!(run["structuredContent"]["status"], "READY");
+    assert_eq!(run["structuredContent"]["boot"], "snapshot");
+
+    // exec returns the guest's exit code and streams separately; a failure is data, not an error.
+    let ok = c.tool(
+        "dorker_exec",
+        json!({"instance": "agent", "command": "getprop ro.build.version.sdk"}),
+    );
+    assert_eq!(
+        ok["structuredContent"]["stdout"].as_str().unwrap().trim(),
+        "35"
+    );
+    let bad = c.tool(
+        "dorker_exec",
+        json!({"instance": "agent", "command": "sh -c 'echo oops >&2; exit 3'"}),
+    );
+    assert_eq!(bad["isError"], false);
+    assert_eq!(bad["structuredContent"]["exit_code"], 3);
+    assert_eq!(
+        bad["structuredContent"]["stderr"].as_str().unwrap().trim(),
+        "oops"
+    );
+
+    // Screenshots come back as an image content block holding a PNG.
+    let shot = c.tool("dorker_screenshot", json!({"instance": "agent"}));
+    let img = shot["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["type"] == "image")
+        .expect("image block");
+    assert_eq!(img["mimeType"], "image/png");
+    assert!(
+        img["data"].as_str().unwrap().starts_with("iVBORw0KGgo"),
+        "base64 of the PNG signature"
+    );
+
+    // Test results are structured: counts plus the failing test's stack trace.
+    let runner = "com.dorker.sample.test/com.dorker.sample.SampleRunner";
+    let t = c.tool(
+        "dorker_test",
+        json!({"instance": "agent", "runner": runner}),
+    );
+    assert_eq!(t["structuredContent"]["ok"], false);
+    assert_eq!(t["structuredContent"]["passed"], 2);
+    assert_eq!(t["structuredContent"]["failures"][0]["test"], "failing");
+    let t = c.tool("dorker_test", json!({"instance": "agent", "runner": runner, "class": "com.dorker.sample.SampleTests#passing"}));
+    assert_eq!(t["structuredContent"]["ok"], true);
+
+    // A conflict is a tool error that carries the CLI's message and the exit-code meaning.
+    let dup = c.tool("dorker_run", json!({"image": "mcp:e2e", "name": "agent"}));
+    assert_eq!(dup["isError"], true);
+    assert!(
+        dup["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("already in use")
+    );
+
+    let rm = c.tool("dorker_rm", json!({"instance": "agent"}));
+    assert_eq!(rm["structuredContent"]["removed"], json!(["agent"]));
+    assert_eq!(
+        c.tool("dorker_ps", json!({"all": true}))["structuredContent"]["instances"],
+        json!([])
+    );
 }

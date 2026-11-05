@@ -19,6 +19,8 @@ itself. One crate, synchronous, no daemon.
 | `testcmd.rs` | `dorker test`: runs `am instrument -r`, parses the status protocol, preserves logs |
 | `bench.rs` | `dorker bench` |
 | `errors.rs` | stable exit codes |
+| `mcp.rs` | `dorker mcp`: MCP server on stdio; each tool runs the CLI with `--json` |
+| `log.rs` | `-v/--verbose` stderr logging |
 | `units.rs` | size and image-reference parsing |
 
 ## Decisions

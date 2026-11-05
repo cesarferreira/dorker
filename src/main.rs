@@ -6,6 +6,7 @@ mod dorkerfile;
 mod errors;
 mod images;
 mod log;
+mod mcp;
 mod runtime;
 mod sdk;
 mod store;
@@ -69,6 +70,8 @@ enum Command {
     Pull { image: String },
     /// Create a starter Dorkerfile in the current directory
     Init,
+    /// Run a Model Context Protocol server on stdio, so AI agents can drive dorker
+    Mcp,
     /// Run instrumentation tests in an instance
     Test {
         instance: String,
@@ -78,9 +81,13 @@ enum Command {
         /// Limit to a class or class#method (comma separated)
         #[arg(long)]
         class: Option<String>,
+
         /// Seconds before the run is aborted
         #[arg(long, default_value_t = 600)]
         timeout: u64,
+        /// Print the result as JSON on stdout
+        #[arg(long)]
+        json: bool,
     },
     /// Measure boot, restore, install and resource numbers for an image
     Bench {
@@ -137,6 +144,9 @@ enum Command {
         /// angle_indirect, guest, off, auto. Built images fix this in their Dorkerfile.
         #[arg(long)]
         gpu: Option<String>,
+        /// Print the started instance as JSON on stdout (requires --detach)
+        #[arg(long)]
+        json: bool,
     },
     /// List instances
     Ps {
@@ -148,6 +158,9 @@ enum Command {
     },
     /// Run an Android shell command in an instance
     Exec {
+        /// Print {exit_code, stdout, stderr} as JSON (put before the instance)
+        #[arg(long)]
+        json: bool,
         instance: String,
         /// Command to run, e.g. "pm list packages"
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
@@ -157,11 +170,17 @@ enum Command {
     Install {
         instance: String,
         apk: std::path::PathBuf,
+        /// Print the result as JSON on stdout
+        #[arg(long)]
+        json: bool,
     },
     /// Capture a PNG screenshot
     Screenshot {
         instance: String,
         output: std::path::PathBuf,
+        /// Print {path, bytes} as JSON on stdout
+        #[arg(long)]
+        json: bool,
     },
     /// Show Android logcat for an instance
     Logs {
@@ -169,6 +188,9 @@ enum Command {
         /// Stream until interrupted
         #[arg(short, long)]
         follow: bool,
+        /// Print only the last N lines and exit
+        #[arg(long)]
+        tail: Option<u32>,
     },
     /// Restart a stopped instance (cold boot; keeps its data)
     Start {
@@ -176,6 +198,9 @@ enum Command {
         /// Seconds to wait for Android to boot
         #[arg(long, default_value_t = 300)]
         timeout: u64,
+        /// Print the instance as JSON on stdout
+        #[arg(long)]
+        json: bool,
     },
     /// Stop a running instance
     Stop {
@@ -232,6 +257,7 @@ fn run(cli: Cli) -> Result<i32> {
             adb_port,
             timeout,
             gpu,
+            json,
         } => commands::run(commands::RunArgs {
             image,
             name,
@@ -242,6 +268,7 @@ fn run(cli: Cli) -> Result<i32> {
             adb_port,
             timeout,
             gpu,
+            json,
         }),
         Command::Build {
             context,
@@ -258,12 +285,14 @@ fn run(cli: Cli) -> Result<i32> {
         }),
         Command::Pull { image } => commands::pull(&image),
         Command::Init => commands::init(),
+        Command::Mcp => mcp::serve(),
         Command::Test {
             instance,
             runner,
             class,
             timeout,
-        } => testcmd::run(&instance, &runner, class.as_deref(), timeout),
+            json,
+        } => testcmd::run(&instance, &runner, class.as_deref(), timeout, json),
         Command::Bench {
             image,
             runs,
@@ -288,11 +317,31 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Images { json } => commands::images(json),
         Command::Rmi { image } => commands::rmi(&image),
         Command::Ps { all, json } => commands::ps(all, json),
-        Command::Exec { instance, command } => commands::exec(&instance, &command),
-        Command::Install { instance, apk } => commands::install(&instance, &apk),
-        Command::Screenshot { instance, output } => commands::screenshot(&instance, &output),
-        Command::Logs { instance, follow } => commands::logs(&instance, follow),
-        Command::Start { instance, timeout } => commands::start_existing(&instance, timeout),
+        Command::Exec {
+            json,
+            instance,
+            command,
+        } => commands::exec(&instance, &command, json),
+        Command::Install {
+            instance,
+            apk,
+            json,
+        } => commands::install(&instance, &apk, json),
+        Command::Screenshot {
+            instance,
+            output,
+            json,
+        } => commands::screenshot(&instance, &output, json),
+        Command::Logs {
+            instance,
+            follow,
+            tail,
+        } => commands::logs(&instance, follow, tail),
+        Command::Start {
+            instance,
+            timeout,
+            json,
+        } => commands::start_existing(&instance, timeout, json),
         Command::Stop { instances } => commands::each(&instances, commands::stop),
         Command::Rm { instances, force } => commands::each(&instances, |i| commands::rm(i, force)),
     }

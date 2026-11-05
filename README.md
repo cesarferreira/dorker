@@ -126,6 +126,19 @@ cargo test                          # unit + CLI tests, no emulator needed
 cargo test -- --ignored --test-threads=1   # end-to-end: boots real emulators (~2 min)
 ```
 
+### Use it from AI agents
+
+`dorker mcp` is a Model Context Protocol server: an agent can start instances, install apps,
+run commands, take screenshots, read logs and run tests, all with structured results.
+
+```bash
+claude mcp add dorker -- dorker mcp
+```
+
+See [docs/mcp.md](docs/mcp.md) for the tools, other clients and security notes. The same
+operations are available to scripts as `--json` on `run`, `start`, `exec`, `install`,
+`screenshot`, `test`, `ps`, `images`, `doctor` and `bench`.
+
 ### Diagnostics
 
 `dorker -v <command>` (or `DORKER_VERBOSE=1`) prints what dorker decides and runs to stderr: the

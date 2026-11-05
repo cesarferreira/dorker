@@ -342,6 +342,7 @@ pub fn run(a: BenchArgs) -> Result<i32> {
         adb_port: None,
         timeout: a.timeout,
         gpu: a.gpu.clone(),
+        json: false,
     };
     let mut cold = Vec::new();
     let mut restore = Vec::new();
