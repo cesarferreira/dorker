@@ -102,8 +102,8 @@ Each instance gets its own private AVD under `~/.dorker` (override with
 instance when it stops. `ps`, `images` and `doctor` accept `--json`.
 
 Measured on an Apple M4 Pro, API 35, 2GB: cold boot about 15s, snapshot restore
-about 4s. A 2GB guest used about 5.5GB of host memory. Details and caveats:
-[docs/benchmarks.md](docs/benchmarks.md).
+about 4s. Host memory is about 2.5GB after a cold boot and 3.3GB after a restore.
+Details and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 
 ### Test, benchmark, automate
 
@@ -148,9 +148,9 @@ See [docs/architecture.md](docs/architecture.md) for design and limitations.
 - **Platform:** validated on macOS Apple Silicon (primary) and Linux x86_64 with KVM (Ubuntu 24.04, an Azure VM with nested virtualisation; unit tests and the full emulator end-to-end suite pass). Linux arm64 and bare-metal Linux are untested; Windows is unsupported. Linux is slower in our measurements (cold boot about 29s, snapshot restore about 9s; see [docs/benchmarks.md](docs/benchmarks.md)).
 - **System images are installed on request, not automatically.** `dorker pull android:35` runs the SDK's `sdkmanager` (needs the command-line tools and may prompt for licences); `dorker run`/`build` print this command when an image is missing. The download path itself was only verified for the already-installed and nonexistent-package cases, not a real multi-GB download.
 - **Snapshots are strict.** A change of emulator version, system-image revision, memory or CPUs invalidates an image's snapshot. dorker then cold boots (about 15s) and says so. Snapshots are host-specific and not portable between machines.
-- **Memory:** a 2GB guest used about 5.5GB of host RAM in our measurements.
+- **Memory:** a 2GB guest used about 2.5GB of host memory after a cold boot and 3.3GB after a snapshot restore on macOS (3-3.7GB on Linux). Idle CPU is dominated by Android background work and takes about a minute to settle.
 - **Builds take about 45s** because dorker reboots the guest to persist provisioned state.
-- **`CMD`** only supports `launch <package>`. `dorker start` always cold boots (about 14s) because restoring the image snapshot would roll back the instance's data. There is no GPU-mode selection (software rendering is used when headless) and no automatic test-APK discovery.
+- **`CMD`** only supports `launch <package>`. `dorker start` always cold boots (about 14s) because restoring the image snapshot would roll back the instance's data. There is software rendering (`swiftshader_indirect`) is the default; `GPU <mode>` in the Dorkerfile selects another, but none was faster for snapshot restore in our measurements (see docs/benchmarks.md) and no automatic test-APK discovery.
 - **Concurrency:** creating instances concurrently is safe, and `stop`, `rm` and `start` on the same instance are serialised by a per-instance lock (the second command waits up to 60s, then exits 8).
 - **Orphans:** emulator processes that dorker started but lost track of (CLI killed mid-start) are reported by `dorker ps`, not adopted or killed automatically.
 - `examples/basic` and `examples/instrumentation` use tiny hand-built APKs; `examples/counter-app` is the realistic one.

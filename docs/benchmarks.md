@@ -15,8 +15,8 @@ on 2026-11-05. Reproduce with the same command; add `--json` for machine-readabl
 | Snapshot restore to verified readiness | 3.8 s (3.8, 2.9, 3.8) |
 | APK install (instrumentation test APK) | 1.3 s |
 | Screenshot (1080x2400 PNG) | 1.3 s |
-| Idle CPU (interval average, one instance) | 33.9 % of one core |
-| Idle host RSS (emulator process) | 5.5 GB |
+| Idle CPU, after the guest settles | 18-36 % of one core (noisy; see "Idle CPU and memory" below) |
+| Host memory (physical footprint) | about 2.2-2.6 GB after a cold boot, 3.2-3.4 GB after a snapshot restore |
 | Stop + remove | 1.6 s |
 | Image build (`dorker build`, uncached, with persist-and-verify reboot) | about 45 s (single run; about 25 s before the reboot was added) |
 | Image build (cached) | 0.45 s (single run) |
@@ -27,14 +27,53 @@ on 2026-11-05. Reproduce with the same command; add `--json` for machine-readabl
   is also the baseline: dorker adds no measurable boot overhead of its own. The
   PRD's cold boot target (under 20 s) and prepared-instance target (under 5 s) are
   both met on this machine.
-- **A 2 GB guest used about 5.5 GB of host memory** here. Guest RAM is not host
-  memory: the figure includes the restored 2 GB snapshot, the emulator's graphics
-  stack and host-side buffers. Do not size CI machines from the guest figure.
-- Idle CPU stays near a third of a core with software rendering. GPU modes
-  (`-gpu host`) were not benchmarked.
+- **Corrected:** this file originally reported "idle CPU 33.9 %" and "idle host RSS 5.5 GB".
+  Both were misleading. The CPU figure was taken 10 s after the guest was ready, while
+  Android was still doing first-boot work; the memory figure was `ps` RSS, which on macOS
+  excludes compressed pages and varied from 0.8 GB to 3.6 GB for the *same* workload.
+  `dorker bench` now waits for the guest to go quiet before measuring CPU and reports
+  physical footprint on macOS (see below).
 - Image size is about 3.3 GB logical, of which a 2 GB `ram.bin` is the snapshot.
   Instances are APFS clones of it, so each starts cheap and grows as it writes.
-- Single machine, three runs, no warm-cache control. Treat as indicative.
+- Single machine, a few runs, no warm-cache control. Treat as indicative.
+
+## Idle CPU and memory
+
+Measured by `dorker bench` after the emulator process uses under 25 % of a core over a
+5 s window (up to 90 s of waiting), then averaged over 10 s.
+
+- **Memory:** on the Mac, physical footprint is about 2.2-2.6 GB after a cold boot and
+  3.2-3.4 GB after a snapshot restore. A restore therefore costs about 1 GB more host
+  memory than a cold boot of the same guest, because the restored RAM image is resident.
+  On Linux (VmRSS) it is 3.0-3.5 GB cold and 3.4-3.7 GB restored.
+- **CPU:** about 10 % of one core on a fully warmed guest (Linux, see below), but
+  18-36 % right after boot on the Mac, and **one restored instance never went quiet in
+  90 s (130 %)** while another settled in 55 s. Idle CPU is dominated by Android and
+  Google apps doing background work, not by rendering, and it varies a lot between runs.
+  If you need a low-CPU idle instance, expect to wait about a minute after start.
+
+## GPU modes
+
+Compared with identical images that differ only in the `GPU` directive, interleaved
+(A, B, A, B), 4 runs per round. Medians in seconds.
+
+| Platform | Mode | Cold boot | Snapshot restore | Notes |
+|---|---|---|---|---|
+| macOS M4 Pro | `swiftshader_indirect` (default) | 17.0, 16.8 | 3.6, 3.9 | |
+| macOS M4 Pro | `host` | 16.6, 12.6 | 4.2, 4.4 | restore is consistently about 0.4 s slower; screenshots faster (1.2-1.5 s vs 2.0-2.2 s) |
+| Linux x86_64 | `swiftshader_indirect` (default) | 29.1, 29.1 | 8.6, 9.2 | |
+| Linux x86_64 | `angle_indirect` | 25.6, 26.5 | 9.1, 10.2 | cold boot about 11 % faster, restore noisy and not faster; about 0.3-0.4 GB less memory |
+| Linux x86_64 | `host` | fails | n/a | "Could not start renderer": no GPU or display on a headless VM |
+
+Warmed-guest control on Linux (60 s settle, same AVD, `-gpu` on the emulator command line):
+`swiftshader_indirect` 9.9 % and 12.6 %, `guest` 9.8 %, `angle_indirect` 9.7 % and 15.2 %,
+`off` 10.9 % idle CPU. The spread within one mode is as large as the spread between modes.
+
+**Conclusion:** no GPU mode improved snapshot restore, which is the path dorker is built
+around, so the default stays `swiftshader_indirect` (it works on every host). `GPU` is
+available as an opt-in per Dorkerfile; `host` needs a real GPU and display, and
+`angle_indirect` may help cold-boot-heavy or memory-constrained Linux setups. The GPU
+mode is part of the snapshot's hardware identity, so it is part of the image fingerprint.
 
 ## Linux x86_64 (KVM)
 
@@ -53,13 +92,13 @@ Same command (`dorker bench sample --runs 3 --apk examples/instrumentation/test.
 | Snapshot restore to verified readiness | 9.2 s (9.2, 9.3, 9.0) |
 | APK install | 4.3 s |
 | Screenshot | 2.0 s |
-| Idle CPU (interval average) | 229 % of one core |
-| Idle host RSS | 3.6 GB |
+| Idle CPU | **229 % was a measurement artifact** (guest first-boot work); about 10 % once warmed up, 15-60 % in later runs, noisy |
+| Host memory (VmRSS) | 3.5 GB cold, 3.7 GB after restore |
 | Stop + remove | 2.2 s |
 | Image build (uncached) | 92 s |
 
 Notes: this is a virtual machine on shared infrastructure with nested virtualisation, so
 treat it as a pessimistic CI-like environment, not bare-metal Linux. Boots were slower
 (46-65 s) the first time an image was read from disk, and these numbers are from a warm
-page cache. The Mac's restore target (under 5 s) is **not** met here (9.2 s). Idle CPU is
-also much higher with software rendering on this CPU. Three runs, one machine.
+page cache. The Mac's restore target (under 5 s) is **not** met here (9.2 s). Three runs, one machine. See "Idle CPU and memory" above for why the idle CPU figure
+originally listed here was wrong.

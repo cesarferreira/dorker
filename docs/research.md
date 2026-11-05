@@ -138,7 +138,7 @@ Ubuntu 24.04 Azure VM with nested KVM, emulator 37.2.12.0, the SDK's own `qemu-s
    copied from a working AVD and the instance boots, but emulator updates may
    change required keys. Mitigation: boot test in CI.
 3. **Pid identity** relies on `ps -o command=` containing `-avd dorker -port <port>`.
-4. **Host memory**: a 2 GB guest used about 5.5 GB of host RSS (see `benchmarks.md`).
+4. **Host memory**: about 2.5 GB (macOS footprint) after a cold boot and 3.3 GB after a restore for a 2 GB guest; `ps` RSS is unreliable on macOS (see `benchmarks.md`).
 5. **Port range** 5554-5680 follows the emulator's console convention.
 6. **Image resolution** only reads installed images; downloading via
    `sdkmanager` is deferred.
