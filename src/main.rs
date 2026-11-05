@@ -1,11 +1,14 @@
+mod bench;
 mod build;
 mod commands;
 mod doctor;
 mod dorkerfile;
+mod errors;
 mod images;
 mod runtime;
 mod sdk;
 mod store;
+mod testcmd;
 #[cfg(test)]
 mod testutil;
 mod units;
@@ -57,6 +60,35 @@ enum Command {
     },
     /// Remove an image
     Rmi { image: String },
+    /// Create a starter Dorkerfile in the current directory
+    Init,
+    /// Run instrumentation tests in an instance
+    Test {
+        instance: String,
+        /// Instrumentation runner, e.g. com.example.test/androidx.test.runner.AndroidJUnitRunner
+        #[arg(long)]
+        runner: String,
+        /// Limit to a class or class#method (comma separated)
+        #[arg(long)]
+        class: Option<String>,
+        /// Seconds before the run is aborted
+        #[arg(long, default_value_t = 600)]
+        timeout: u64,
+    },
+    /// Measure boot, restore, install and resource numbers for an image
+    Bench {
+        /// android:<api> or a built image
+        image: String,
+        #[arg(long, default_value_t = 3)]
+        runs: u32,
+        /// APK to time the install of
+        #[arg(long)]
+        apk: Option<std::path::PathBuf>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+    },
     /// Launch an instance from an image (e.g. android:35)
     Run {
         image: String,
@@ -135,7 +167,7 @@ fn main() {
         Ok(code) => std::process::exit(code),
         Err(e) => {
             eprintln!("error: {e:#}");
-            std::process::exit(1);
+            std::process::exit(errors::code_of(&e));
         }
     }
 }
@@ -174,6 +206,26 @@ fn run(cli: Cli) -> Result<i32> {
             context,
             timeout,
             no_cache,
+        }),
+        Command::Init => commands::init(),
+        Command::Test {
+            instance,
+            runner,
+            class,
+            timeout,
+        } => testcmd::run(&instance, &runner, class.as_deref(), timeout),
+        Command::Bench {
+            image,
+            runs,
+            apk,
+            json,
+            timeout,
+        } => bench::run(bench::BenchArgs {
+            image,
+            runs: runs.max(1),
+            apk,
+            json,
+            timeout,
         }),
         Command::Images { json } => commands::images(json),
         Command::Rmi { image } => commands::rmi(&image),

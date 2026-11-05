@@ -225,5 +225,5 @@ pub fn run(json: bool) -> Result<i32> {
             }
         );
     }
-    Ok(if failed { 2 } else { 0 })
+    Ok(if failed { crate::errors::DEPENDENCY } else { 0 })
 }

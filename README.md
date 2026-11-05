@@ -94,11 +94,40 @@ Each instance gets its own private AVD under `~/.dorker` (override with
 `DORKER_HOME`). Your existing AVDs are never touched. `dorker run --rm` removes the
 instance when it stops. `ps`, `images` and `doctor` accept `--json`.
 
-Measured on an M-series Mac, API 35, 2GB: cold boot 14-20s, snapshot restore
-2-4s. These are ad hoc runs; see [docs/research.md](docs/research.md).
+Measured on an Apple M4 Pro, API 35, 2GB: cold boot about 15s, snapshot restore
+about 4s. A 2GB guest used about 5.5GB of host memory. Details and caveats:
+[docs/benchmarks.md](docs/benchmarks.md).
 
-Not yet implemented: `dorker test`, `dorker bench`. See
-[docs/architecture.md](docs/architecture.md).
+### Test, benchmark, automate
+
+```bash
+dorker init                                   # starter Dorkerfile
+dorker test t1 --runner com.example.test/androidx.test.runner.AndroidJUnitRunner
+dorker test t1 --runner ... --class com.example.FooTest#bar
+dorker bench myapp:latest --runs 3 --json     # boot, restore, install, idle usage
+```
+
+`dorker test` prints a summary, preserves the raw instrumentation output and logcat
+under the instance directory, and exits 7 if anything failed.
+See [examples/instrumentation](examples/instrumentation) for a runnable example.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | success |
+| 1 | other error |
+| 2 | invalid configuration or arguments (including Dorkerfile errors) |
+| 3 | missing dependency (SDK, emulator, adb, system image); `doctor` failures |
+| 4 | image build failed |
+| 5 | instance failed to start or boot |
+| 6 | adb operation failed |
+| 7 | instrumentation tests failed |
+| 8 | name, port or build conflict |
+
+`dorker exec` returns the guest command's own exit status.
+
+See [docs/architecture.md](docs/architecture.md) for design and limitations.
 
 <a id="development"></a>
 ## Development

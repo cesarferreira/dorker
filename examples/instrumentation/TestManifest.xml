@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.dorker.sample.test"
+    android:versionCode="1" android:versionName="1.0">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
+    <application android:label="dorker sample tests" />
+    <instrumentation android:name="com.dorker.sample.SampleRunner" android:targetPackage="com.dorker.sample.test" />
+</manifest>

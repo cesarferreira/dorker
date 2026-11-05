@@ -1,6 +1,7 @@
 //! `dorker build`: Dorkerfile -> immutable image.
 
 use crate::dorkerfile::{self, Cmd, Dorkerfile};
+use crate::errors;
 use crate::images::{self, ImageMeta};
 use crate::runtime::{self, BootMode};
 use crate::sdk::Sdk;
@@ -200,11 +201,14 @@ pub fn build(a: BuildArgs) -> Result<i32> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Dorkerfile".into());
-    let df = dorkerfile::parse(&display, &source)?;
+    let df =
+        dorkerfile::parse(&display, &source).map_err(|e| errors::with(errors::CONFIG)(e.into()))?;
     let tag = a.tag.as_deref().map(images::normalize_tag).transpose()?;
 
-    let sdk = Sdk::locate()?;
-    let sys = sdk.resolve(&df.from)?;
+    let sdk = Sdk::locate().map_err(errors::with(errors::DEPENDENCY))?;
+    let sys = sdk
+        .resolve(&df.from)
+        .map_err(errors::with(errors::DEPENDENCY))?;
     let revision = sdk.system_image_revision(&sys)?;
     let emulator_version = sdk.emulator_version()?;
     let host_cpus = std::thread::available_parallelism()
@@ -221,7 +225,7 @@ pub fn build(a: BuildArgs) -> Result<i32> {
         .installs
         .iter()
         .map(|w| {
-            let path = resolve_in_context(&context, w)?;
+            let path = resolve_in_context(&context, w).map_err(errors::with(errors::CONFIG))?;
             let sha256 = sha256_file(&path)?;
             Ok(ResolvedApk {
                 written: w.clone(),
@@ -275,7 +279,8 @@ pub fn build(a: BuildArgs) -> Result<i32> {
         eprintln!("Using cached image {id} (identical Dorkerfile, APKs and toolchain)");
     } else {
         runtime::install_interrupt_handler();
-        build_new(&sdk, &store, &sys, &df, &apks, &mut meta, a.timeout)?;
+        build_new(&sdk, &store, &sys, &df, &apks, &mut meta, a.timeout)
+            .map_err(errors::with(errors::BUILD))?;
     }
     if let Some(t) = &tag {
         images::apply_tag(&store, &mut meta, t)?;
@@ -306,7 +311,9 @@ fn build_new(
         .iter()
         .any(|i| i.name == name && i.state.expects_process())
     {
-        bail!("an identical build ({name}) is already running");
+        return Err(errors::with(errors::CONFLICT)(anyhow::anyhow!(
+            "an identical build ({name}) is already running"
+        )));
     }
     if let Ok(old) = store.find(&name) {
         let _ = store.remove(&old); // leftover from an earlier failed build

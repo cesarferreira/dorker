@@ -100,8 +100,8 @@ benchmark.
 2. **Hand-written AVD `config.ini`**: not a stable public interface. Keys were
    copied from a working AVD and the instance boots, but emulator updates may
    change required keys. Mitigation: boot test in CI.
-3. **Pid identity** relies on `ps -o command=` containing `dorker-<id>`.
-4. **Host memory**: a 2 GB guest uses more host RAM than 2 GB. Not measured.
+3. **Pid identity** relies on `ps -o command=` containing `-avd dorker -port <port>`.
+4. **Host memory**: a 2 GB guest used about 5.5 GB of host RSS (see `benchmarks.md`).
 5. **Port range** 5554-5680 follows the emulator's console convention.
 6. **Image resolution** only reads installed images; downloading via
    `sdkmanager` is deferred.

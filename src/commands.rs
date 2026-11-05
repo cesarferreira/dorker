@@ -1,4 +1,5 @@
-use crate::images;
+use crate::errors;
+use crate::images::{self, ImageMeta};
 use crate::runtime::{self, BootMode};
 use crate::sdk::Sdk;
 use crate::store::{Instance, State, Store, new_id, now_secs};
@@ -53,21 +54,33 @@ fn patch_config(path: &std::path::Path, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn run(a: RunArgs) -> Result<i32> {
-    let sdk = Sdk::locate()?;
+pub struct Started {
+    pub sdk: Sdk,
+    pub store: Store,
+    pub inst: Instance,
+    pub image: Option<ImageMeta>,
+    pub ready_secs: f64,
+    pub restored: bool,
+}
+
+/// Create, start and wait for an instance. `force_cold` ignores any snapshot.
+pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
+    let sdk = Sdk::locate().map_err(errors::with(errors::DEPENDENCY))?;
     if !sdk.emulator().is_file() {
-        bail!(
+        return Err(errors::with(errors::DEPENDENCY)(anyhow::anyhow!(
             "emulator not found at {}\n\nRun `dorker doctor`.",
             sdk.emulator().display()
-        );
+        )));
     }
     let store = Store::open()?;
+    let cfg = errors::with(errors::CONFIG);
+    let dep = errors::with(errors::DEPENDENCY);
 
     // Resolve what to run: a base `android:<api>` image or a built image.
     let image_meta = if a.image.starts_with("android:") {
         None
     } else {
-        Some(images::find(&store, &a.image)?)
+        Some(images::find(&store, &a.image).map_err(cfg)?)
     };
     let (sys, mut memory_mb, mut cpus, disk_mb, headless, device, (width, height)) =
         match &image_meta {
@@ -78,7 +91,8 @@ pub fn run(a: RunArgs) -> Result<i32> {
                 };
                 let sys = sdk
                     .resolve(&r)
-                    .with_context(|| format!("image {} needs {}", m.id, m.system_image))?;
+                    .with_context(|| format!("image {} needs {}", m.id, m.system_image))
+                    .map_err(dep)?;
                 (
                     sys,
                     m.memory_mb,
@@ -90,7 +104,9 @@ pub fn run(a: RunArgs) -> Result<i32> {
                 )
             }
             None => {
-                let sys = sdk.resolve(&ImageRef::parse(&a.image)?)?;
+                let sys = sdk
+                    .resolve(&ImageRef::parse(&a.image).map_err(cfg)?)
+                    .map_err(dep)?;
                 (
                     sys,
                     2048,
@@ -104,7 +120,7 @@ pub fn run(a: RunArgs) -> Result<i32> {
         };
     let mut overridden = false;
     if let Some(m) = &a.memory {
-        let mb = parse_size_mb(m)?;
+        let mb = parse_size_mb(m).map_err(cfg)?;
         overridden |= mb != memory_mb;
         memory_mb = mb;
     }
@@ -113,14 +129,21 @@ pub fn run(a: RunArgs) -> Result<i32> {
         cpus = c;
     }
     if memory_mb < 1024 {
-        bail!("--memory must be at least 1GB (got {memory_mb}MB)");
+        return Err(cfg(anyhow::anyhow!(
+            "--memory must be at least 1GB (got {memory_mb}MB)"
+        )));
     }
     if cpus == 0 || cpus > host_cpus() {
-        bail!("--cpus must be between 1 and {} (host cores)", host_cpus());
+        return Err(cfg(anyhow::anyhow!(
+            "--cpus must be between 1 and {} (host cores)",
+            host_cpus()
+        )));
     }
     if let Some(n) = &a.name {
         if !valid_name(n) {
-            bail!("invalid --name {n:?}: use letters, digits, '-', '_' or '.'");
+            return Err(cfg(anyhow::anyhow!(
+                "invalid --name {n:?}: use letters, digits, '-', '_' or '.'"
+            )));
         }
     }
 
@@ -128,7 +151,7 @@ pub fn run(a: RunArgs) -> Result<i32> {
     // emulator compares (hardware config, system image, emulator build) matches.
     let mut boot = BootMode::Cold;
     let mut snapshot = None;
-    if let Some(m) = &image_meta {
+    if let Some(m) = image_meta.as_ref().filter(|_| !force_cold) {
         if let Some(snap) = &m.snapshot {
             let rev = sdk.system_image_revision(&sys).unwrap_or_default();
             let emu = sdk.emulator_version().unwrap_or_default();
@@ -155,18 +178,21 @@ pub fn run(a: RunArgs) -> Result<i32> {
 
     // Name/port allocation and process spawn happen under one lock so that
     // concurrent `dorker run` invocations cannot collide.
-    let lock = store.lock_create()?;
+    let lock = store
+        .lock_create()
+        .map_err(errors::with(errors::CONFLICT))?;
     let id = new_id();
     let name = a
         .name
         .clone()
         .unwrap_or_else(|| format!("android-{}", &id[..6]));
     if store.load_all()?.iter().any(|i| i.name == name) {
-        bail!(
+        return Err(errors::with(errors::CONFLICT)(anyhow::anyhow!(
             "instance name {name:?} is already in use\n\nRun `dorker rm {name}` or pick another --name."
-        );
+        )));
     }
-    let console_port = runtime::allocate_port(&store, a.adb_port)?;
+    let console_port =
+        runtime::allocate_port(&store, a.adb_port).map_err(errors::with(errors::CONFLICT))?;
 
     let mut inst = Instance {
         id,
@@ -214,7 +240,7 @@ pub fn run(a: RunArgs) -> Result<i32> {
     drop(lock);
     if let Err(e) = started {
         let _ = store.remove(&inst); // never leave a half-created instance behind
-        return Err(e);
+        return Err(errors::with(errors::STARTUP)(e));
     }
 
     eprintln!(
@@ -240,16 +266,38 @@ pub fn run(a: RunArgs) -> Result<i32> {
         if a.rm {
             let _ = store.remove(&inst);
         }
-        return Err(e);
+        return Err(errors::with(errors::STARTUP)(e));
     }
-    let how = if runtime::restored_from_snapshot(&store, &inst) {
-        "snapshot restore"
-    } else {
-        "cold boot"
-    };
-    eprintln!("Ready in {:.1}s ({how})", t0.elapsed().as_secs_f64());
+    let ready_secs = t0.elapsed().as_secs_f64();
+    let restored = runtime::restored_from_snapshot(&store, &inst);
+    eprintln!(
+        "Ready in {ready_secs:.1}s ({})",
+        if restored {
+            "snapshot restore"
+        } else {
+            "cold boot"
+        }
+    );
+    Ok(Started {
+        sdk,
+        store,
+        inst,
+        image: image_meta,
+        ready_secs,
+        restored,
+    })
+}
 
-    if let Some(pkg) = image_meta.as_ref().and_then(|m| m.launch.as_ref()) {
+pub fn run(a: RunArgs) -> Result<i32> {
+    let Started {
+        sdk,
+        store,
+        mut inst,
+        image,
+        ..
+    } = start(&a, false)?;
+
+    if let Some(pkg) = image.as_ref().and_then(|m| m.launch.as_ref()) {
         let launched = runtime::adb(&sdk, &inst.serial())
             .args([
                 "shell",
@@ -337,6 +385,26 @@ pub fn rmi(key: &str) -> Result<i32> {
     Ok(0)
 }
 
+pub fn init() -> Result<i32> {
+    let path = std::path::Path::new("Dorkerfile");
+    if path.exists() {
+        return Err(errors::with(errors::CONFLICT)(anyhow::anyhow!(
+            "Dorkerfile already exists; not overwriting it"
+        )));
+    }
+    std::fs::write(
+        path,
+        "FROM android:35\n\nMEMORY 2GB\nCPUS 2\nDISK 4GB\n\nDEVICE pixel_7\nHEADLESS true\n\n\
+         # INSTALL ./app/build/outputs/apk/debug/app-debug.apk\n\n\
+         SETTING window_animation_scale 0\nSETTING transition_animation_scale 0\nSETTING animator_duration_scale 0\n\n\
+         SNAPSHOT ready\n",
+    )?;
+    println!(
+        "Created Dorkerfile.\n\nNext:\n  dorker doctor\n  dorker build -t myapp:latest .\n  dorker run -d --name test myapp:latest\n\nSee docs/dorkerfile.md for every directive."
+    );
+    Ok(0)
+}
+
 pub fn ps(all: bool, json: bool) -> Result<i32> {
     let store = Store::open()?;
     let mut list = store.load_all()?;
@@ -383,7 +451,7 @@ pub fn ps(all: bool, json: bool) -> Result<i32> {
 
 /// Look up an instance and require it to be READY (verified against the process).
 fn ready_instance(key: &str) -> Result<(Sdk, Instance)> {
-    let sdk = Sdk::locate()?;
+    let sdk = Sdk::locate().map_err(errors::with(errors::DEPENDENCY))?;
     let store = Store::open()?;
     let mut inst = store.find(key)?;
     runtime::reconcile(&store, &mut inst)?;
@@ -420,7 +488,7 @@ pub fn install(key: &str, apk: &Path) -> Result<i32> {
         .arg(apk)
         .status()
         .context("running adb")?;
-    Ok(code_of(status))
+    Ok(if status.success() { 0 } else { errors::ADB })
 }
 
 pub fn screenshot(key: &str, output: &Path) -> Result<i32> {
@@ -430,10 +498,10 @@ pub fn screenshot(key: &str, output: &Path) -> Result<i32> {
         .output()
         .context("running adb")?;
     if !out.status.success() || !out.stdout.starts_with(b"\x89PNG\r\n\x1a\n") {
-        bail!(
+        return Err(errors::with(errors::ADB)(anyhow::anyhow!(
             "screencap did not return a PNG: {}",
             String::from_utf8_lossy(&out.stderr).trim()
-        );
+        )));
     }
     std::fs::write(output, &out.stdout).with_context(|| format!("writing {}", output.display()))?;
     eprintln!("Saved {} ({} bytes)", output.display(), out.stdout.len());
@@ -450,7 +518,7 @@ pub fn logs(key: &str, follow: bool) -> Result<i32> {
     Ok(code_of(cmd.status().context("running adb")?))
 }
 
-fn stop_instance(sdk: &Sdk, store: &Store, inst: &mut Instance) -> Result<()> {
+pub fn stop_instance(sdk: &Sdk, store: &Store, inst: &mut Instance) -> Result<()> {
     runtime::reconcile(store, inst)?;
     if inst.state.expects_process() {
         inst.set_state(State::Stopping)?;

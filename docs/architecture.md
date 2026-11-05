@@ -8,7 +8,7 @@ itself. One crate, synchronous, no daemon.
 | Module | Responsibility |
 |---|---|
 | `main.rs` | clap CLI surface and dispatch |
-| `commands.rs` | `run`, `ps`, `exec`, `install`, `screenshot`, `logs`, `stop`, `rm` |
+| `commands.rs` | `run`, `ps`, `exec`, `install`, `screenshot`, `logs`, `stop`, `rm`, `images`, `rmi`, `init` |
 | `doctor.rs` | host checks with remediation (`--json`) |
 | `sdk.rs` | locate the SDK, list installed system images, resolve `android:<api>[-flavour]` |
 | `store.rs` | instance metadata, lifecycle states, create lock, ids |
@@ -16,6 +16,9 @@ itself. One crate, synchronous, no daemon.
 | `dorkerfile.rs` | pure Dorkerfile parser with line/column errors |
 | `build.rs` | `dorker build`: fingerprinting, provisioning, atomic publish, lockfile |
 | `images.rs` | image metadata, tags, size accounting |
+| `testcmd.rs` | `dorker test`: runs `am instrument -r`, parses the status protocol, preserves logs |
+| `bench.rs` | `dorker bench` |
+| `errors.rs` | stable exit codes |
 | `units.rs` | size and image-reference parsing |
 
 ## Decisions
@@ -50,7 +53,8 @@ itself. One crate, synchronous, no daemon.
    be attached at the same time.
 9. **Readiness** is `sys.boot_completed=1` and a working package manager.
 10. **Pid identity before signals.** A process is signalled only if its command
-   line contains `dorker-<id>`; the signal goes to its process group.
+   line contains `-avd dorker -port <port>` for this instance; the signal goes to its
+    process group.
 11. **Atomic metadata.** `instance.json` is written to a temp file and renamed.
    A lock file serialises name and port allocation across concurrent runs.
 
@@ -80,6 +84,5 @@ Transitions are validated by `State::can_become`.
 
 ## Not implemented yet
 
-`dorker test`, `dorker bench`, `dorker init`, stable exit codes beyond 0/1 (doctor
-failure is 2), automatic system-image download, restart of stopped instances,
-copy-on-write verification beyond APFS `cp -c`.
+Automatic system-image download, restart of stopped instances, automatic test-APK
+discovery, GPU-mode benchmarking, Linux validation, release packaging (Phase 5).

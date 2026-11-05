@@ -1,0 +1,7 @@
+FROM android:35
+
+INSTALL ./app.apk
+INSTALL ./test.apk
+
+SETTING window_animation_scale 0
+SNAPSHOT ready
