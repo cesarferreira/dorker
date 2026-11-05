@@ -29,8 +29,9 @@ dorker ps                           # note the ADB serial, e.g. emulator-5554
 scrcpy -s emulator-5554             # to see and tap the screen
 
 # Android Auto has no launcher icon; open its settings directly:
+PKG=com.google.android.projection.gearhead
 adb -s emulator-5554 shell am start \
-  -n com.google.android.projection.gearhead/.companion.settings.DefaultSettingsActivity
+  -n $PKG/.companion.settings.DefaultSettingsActivity
 ```
 
 In the app (the UI must be in English):
