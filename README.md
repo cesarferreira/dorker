@@ -136,6 +136,16 @@ cargo test -- --ignored --test-threads=1   # end-to-end: boots real emulators (~
 
 See [docs/architecture.md](docs/architecture.md) for design and limitations.
 
+## Limitations
+
+- **Platform:** validated on macOS Apple Silicon only. Linux may work but is untested; Windows is unsupported.
+- **System images are not downloaded.** Install them with `sdkmanager`; `dorker doctor` and the error messages print the exact command.
+- **Snapshots are strict.** A change of emulator version, system-image revision, memory or CPUs invalidates an image's snapshot. dorker then cold boots (about 15s) and says so. Snapshots are host-specific and not portable between machines.
+- **Memory:** a 2GB guest used about 5.5GB of host RAM in our measurements.
+- **Builds take about 45s** because dorker reboots the guest to persist provisioned state.
+- **`CMD`** only supports `launch <package>`. There is no `dorker start` for stopped instances yet, no GPU-mode selection (software rendering is used when headless) and no automatic test-APK discovery.
+- The manifest-only sample APKs in `examples/` are for demonstration, not real apps.
+
 <a id="development"></a>
 ## Development
 
