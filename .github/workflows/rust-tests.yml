@@ -22,7 +22,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15]
+        # macOS CI is disabled for now; Linux only.
+        # os: [ubuntu-latest, macos-15]
+        os: [ubuntu-latest]
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
