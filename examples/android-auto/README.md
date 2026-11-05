@@ -25,12 +25,31 @@ not start". Do it once on an instance and save it as an image:
 
 ```bash
 dorker run -d --name setup          # builds the Dorkerfile here, then runs it
-# Open Android Auto (scrcpy), then Settings: tap "Version" about 10 times,
-# accept the developer prompt and the first-run consent, then choose
-# More options > Start head unit server. The UI must be in English.
-dorker commit setup -t gearhead:ready
-dorker run -d --name auto gearhead:ready   # already set up
+dorker ps                           # note the ADB serial, e.g. emulator-5554
+scrcpy -s emulator-5554             # to see and tap the screen
+
+# Android Auto has no launcher icon; open its settings directly:
+adb -s emulator-5554 shell am start \
+  -n com.google.android.projection.gearhead/.companion.settings.DefaultSettingsActivity
 ```
+
+In the app (the UI must be in English):
+
+1. Scroll to the bottom and tap **Version and permission info** about 10 times.
+2. In the "Allow development settings?" dialog, choose **OK**.
+3. Open the **&#8942;** menu and choose **Start head unit server**.
+
+Then save it. A new instance from that image starts with the server already listening
+(port 5277 in the guest):
+
+```bash
+dorker commit setup -t gearhead:ready
+dorker run -d --name auto gearhead:ready
+aa session start                    # an openDHU session against it
+```
+
+Checked on an Apple Silicon Mac with `android:36-playstore` and Android Auto 17.9: the
+server survived the commit and a restore, and `aa session start` reached `running`.
 
 Notes:
 
