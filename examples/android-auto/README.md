@@ -6,7 +6,7 @@ CPU architecture, language and screen density.
 
 ```bash
 cargo install apkeep           # once
-./fetch.sh                     # downloads com.google.android.projection.gearhead.xapk
+./fetch.sh                     # downloads the Android Auto .xapk
 
 dorker build -t gearhead .     # installs the bundle, all splits together
 dorker run -d --name auto gearhead
