@@ -111,6 +111,13 @@ dorker bench myapp:latest --runs 3 --json     # boot, restore, install, idle usa
 under the instance directory, and exits 7 if anything failed.
 See [examples/instrumentation](examples/instrumentation) for a runnable example.
 
+### Tests
+
+```bash
+cargo test                          # unit + CLI tests, no emulator needed
+cargo test -- --ignored --test-threads=1   # end-to-end: boots real emulators (~2 min)
+```
+
 ### Exit codes
 
 | Code | Meaning |

@@ -12,6 +12,9 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// How long to let Android flush lazily persisted state before rebooting.
+const FLUSH_DELAY: Duration = Duration::from_secs(6);
+
 pub struct BuildArgs {
     pub file: Option<PathBuf>,
     pub tag: Option<String>,
@@ -84,7 +87,7 @@ pub struct Inputs<'a> {
 /// only their content hashes count, so moving a project does not bust the cache.
 pub fn fingerprint(i: &Inputs) -> String {
     let d = i.df;
-    let mut s = String::from("dorker-build-v1\n");
+    let mut s = String::from("dorker-build-v2\n");
     let _ = writeln!(
         s,
         "system_image={}@{}",
@@ -414,6 +417,34 @@ fn provision(
             &["shell", "settings", "put", &s.namespace, &s.key, &s.value],
             &format!("setting {}", s.key),
         )?;
+    }
+    if !apks.is_empty() || !df.settings.is_empty() {
+        // Android persists settings and the package database lazily, and an adb
+        // reboot is abrupt, so give it time to flush, reboot, then prove the state
+        // survived. Otherwise a cold boot of the image would silently lose it.
+        eprintln!("Persisting provisioned state (flush, reboot, verify)");
+        let flush_until = std::time::Instant::now() + FLUSH_DELAY;
+        while std::time::Instant::now() < flush_until && !runtime::interrupted() {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        runtime::reboot_and_wait(sdk, &serial, Duration::from_secs(timeout))?;
+        for s in &df.settings {
+            let out = adb_checked(
+                sdk,
+                &serial,
+                &["shell", "settings", "get", &s.namespace, &s.key],
+                &format!("reading setting {}", s.key),
+            )?;
+            if out.trim() != s.value {
+                bail!(
+                    "setting {} {} did not persist across a reboot (expected {:?}, found {:?})",
+                    s.namespace,
+                    s.key,
+                    s.value,
+                    out.trim()
+                );
+            }
+        }
     }
     if let Some(name) = &df.snapshot {
         eprintln!("Saving snapshot {name:?}");

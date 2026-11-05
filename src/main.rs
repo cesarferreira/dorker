@@ -166,7 +166,15 @@ fn main() {
     match run(cli) {
         Ok(code) => std::process::exit(code),
         Err(e) => {
-            eprintln!("error: {e:#}");
+            // Parse errors already carry `file:line:col` and an `error:` line.
+            let is_parse = e
+                .downcast_ref::<errors::Coded>()
+                .is_some_and(|c| c.inner.downcast_ref::<dorkerfile::ParseError>().is_some());
+            if is_parse {
+                eprintln!("{e:#}");
+            } else {
+                eprintln!("error: {e:#}");
+            }
             std::process::exit(errors::code_of(&e));
         }
     }

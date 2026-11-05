@@ -18,7 +18,7 @@ on 2026-11-05. Reproduce with the same command; add `--json` for machine-readabl
 | Idle CPU (interval average, one instance) | 33.9 % of one core |
 | Idle host RSS (emulator process) | 5.5 GB |
 | Stop + remove | 1.6 s |
-| Image build (`dorker build`, uncached) | about 25 s (single run) |
+| Image build (`dorker build`, uncached, with persist-and-verify reboot) | about 45 s (single run; about 25 s before the reboot was added) |
 | Image build (cached) | 0.45 s (single run) |
 
 ## Reading these numbers

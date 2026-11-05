@@ -20,16 +20,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-apple-darwin
-            os: macos-15
+          # Only macOS Apple Silicon is a supported, validated platform for v0.1.
           - target: aarch64-apple-darwin
             os: macos-15
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04-arm
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
 
     steps:
       - uses: actions/checkout@v6
@@ -47,18 +40,11 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package (Unix)
-        if: matrix.target != 'x86_64-pc-windows-msvc'
+      - name: Package
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../dorker-${{ matrix.target }}.tar.gz dorker
           cd ../../..
-
-      - name: Package (Windows)
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: pwsh
-        run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/dorker.exe" -DestinationPath "dorker-${{ matrix.target }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7

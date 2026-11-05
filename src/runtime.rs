@@ -147,9 +147,9 @@ pub fn allocate_port(store: &Store, requested: Option<u16>) -> Result<u16> {
     let usable = |p: u16| !taken.contains(&p) && port_free(p) && port_free(p + 1);
     if let Some(p) = requested {
         if p % 2 != 0 || !(FIRST_PORT..=LAST_PORT).contains(&p) {
-            bail!(
+            return Err(crate::errors::with(crate::errors::CONFIG)(anyhow::anyhow!(
                 "--adb-port must be an even console port in {FIRST_PORT}..={LAST_PORT} (adb uses port+1)"
-            );
+            )));
         }
         if !usable(p) {
             bail!("port {p} (or {}) is already in use", p + 1);
@@ -352,6 +352,35 @@ pub fn wait_ready(
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+}
+
+/// Reboot the guest and wait until it is usable again. Rebooting forces Android to
+/// flush delayed writes (package database, settings) to the virtual disk, so the
+/// state survives a cold boot and not only a snapshot restore.
+pub fn reboot_and_wait(sdk: &Sdk, serial: &str, timeout: Duration) -> Result<()> {
+    adb(sdk, serial).args(["shell", "sync"]).output()?;
+    let _ = adb(sdk, serial).arg("reboot").output();
+    let start = Instant::now();
+    // Wait for the device to actually go away, otherwise we would see the old boot.
+    while adb_getprop(sdk, serial, "sys.boot_completed").is_some() {
+        if start.elapsed() > Duration::from_secs(30) {
+            bail!("guest did not reboot within 30s");
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    while !is_ready(sdk, serial) {
+        if start.elapsed() > timeout {
+            bail!(
+                "guest did not come back after reboot within {}s",
+                timeout.as_secs()
+            );
+        }
+        if interrupted() {
+            bail!("interrupted while waiting for the guest to reboot");
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Ok(())
 }
 
 /// Stop the emulator: graceful `adb emu kill`, then SIGTERM, then SIGKILL.

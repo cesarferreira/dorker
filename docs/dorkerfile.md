@@ -49,6 +49,10 @@ image. The image id is a fingerprint of the system-image revision, emulator
 version, resources, APK **contents**, settings and snapshot name, so an identical
 rebuild is a cache hit (`--no-cache` forces a rebuild).
 
+Provisioning ends with a flush, a guest reboot and a check that every `SETTING`
+persisted, then the snapshot is saved. This makes a cold boot of the image
+equivalent to a snapshot restore, and costs roughly 20 s per build.
+
 `Dorkerfile.lock` is written next to the Dorkerfile and records the resolved
 system image and revision, emulator version, device configuration and APK
 SHA-256 hashes. dorker warns when the installed system image or emulator no

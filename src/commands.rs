@@ -254,14 +254,36 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
         inst.serial()
     );
     let t0 = std::time::Instant::now();
-    let ready = runtime::wait_ready(
-        &sdk,
-        &store,
-        &mut inst,
-        Duration::from_secs(a.timeout),
-        runtime::interrupted,
-        || eprintln!("  Android is booting..."),
-    );
+    let wait = |store: &Store, inst: &mut Instance| {
+        runtime::wait_ready(
+            &sdk,
+            store,
+            inst,
+            Duration::from_secs(a.timeout),
+            runtime::interrupted,
+            || eprintln!("  Android is booting..."),
+        )
+    };
+    let mut ready = wait(&store, &mut inst);
+    if ready.is_err() && matches!(boot, BootMode::Restore(_)) && !runtime::interrupted() {
+        // A corrupt or unloadable snapshot must not make the image unusable.
+        eprintln!("warning: snapshot restore failed; falling back to a cold boot");
+        let retry = (|| -> Result<()> {
+            inst.set_state(State::Starting)?;
+            inst.snapshot = None;
+            inst.pid = Some(runtime::spawn_emulator(
+                &sdk,
+                &store,
+                &inst,
+                &BootMode::Cold,
+            )?);
+            store.save(&inst)
+        })();
+        ready = match retry {
+            Ok(()) => wait(&store, &mut inst),
+            Err(e) => Err(e),
+        };
+    }
     if let Err(e) = ready {
         if a.rm {
             let _ = store.remove(&inst);

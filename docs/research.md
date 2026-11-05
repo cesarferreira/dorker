@@ -67,6 +67,20 @@ emulator killed; the AVD directory was then copied and booted elsewhere.
 | Snapshot size | About 2 GB for a 2 GB guest (`ram.bin`); an image is about 3.3 GB logical |
 | Copying an image to an instance | `cp -c -R` (APFS clone) is used, falling back to a plain copy |
 
+Provisioned state and cold boots (found by testing, not documented anywhere I read):
+
+| Experiment | Result |
+|---|---|
+| Provision, save snapshot, `emu kill`, then **cold boot** the image | The APK and `settings put` values are **missing**: they only existed in the snapshot's RAM state |
+| `settings put`, `adb reboot` immediately | Settings are lost (SettingsProvider writes lazily and the reboot is abrupt) |
+| `settings put`, wait about 8 s, `sync`, `adb reboot` | Settings persist (global, system and secure) |
+| Provision, reboot, then save the snapshot | A later cold boot has the APK and settings, and a restore matches it |
+| Image whose `ram.bin` is corrupted | The emulator exits at startup (no self-fallback). dorker detects this and cold boots |
+
+So `dorker build` flushes for 6 s, reboots the guest, verifies every `SETTING`, and
+only then saves the snapshot. This adds about 20 s to builds but makes cold boots
+(corruption fallback, `--memory`/`--cpus` overrides, incompatible emulator) equivalent to restores.
+
 Consequences for the design:
 
 1. Every dorker instance uses the AVD name `dorker`. Isolation comes from a private
@@ -79,6 +93,8 @@ Consequences for the design:
    overrides disable the snapshot.
 4. Instances start with `-snapshot <name> -no-snapshot-save`, so the clone is never
    mutated by the snapshot machinery.
+5. If a restore fails (for example a corrupt snapshot), `dorker run` retries once with
+   a cold boot and says so.
 
 Measured with `dorker run` on this machine (API 35 `google_apis`, 2 GB, 2 CPUs,
 `swiftshader_indirect`): snapshot restore 2.3-3.8 s to verified readiness across
