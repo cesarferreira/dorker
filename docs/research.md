@@ -153,6 +153,22 @@ Google's [Android CLI](https://developer.android.com/tools/agents/android-cli) (
   process safety are its own. Whether `android emulator` could back a future dorker runtime backend
   has not been evaluated.
 
+## System image naming (found when `android:37` failed, 2026-11-05)
+
+Package names cannot be guessed. Google now publishes newer APIs as **minor releases**:
+`android-37.0`, `android-37.1`, `android-37.2` (and betas, canaries), not `android-37`, and some
+releases publish only 16 KB-page flavours (`google_apis_ps16k`, `google_apis_playstore_ps16k`).
+dorker used to build `system-images;android-37;google_apis;<abi>`, which does not exist, so
+`dorker pull android:37` failed with a vague "probably does not exist". `pull` now reads
+`android sdk list --all "system-images/android-<api>*"` and chooses: the base release first
+(`android-37`, then `.0`, then the newest minor), then the best phone flavour (`google_apis`,
+`default`, `aosp_atd`, `google_atd`, then the 16 KB variants, then Play images). Wear, TV,
+tablet and automotive flavours, betas and canaries are only used when asked for explicitly or
+not at all. When nothing matches, the error lists what is published. Verified on real
+repositories: x86_64 Linux pulled and booted `android-37.0/google_apis` (`ro.build.version.sdk`
+= 37), and the parser is tested against real `sdk list` output. If the listing cannot be read
+(legacy `sdkmanager`, offline), `pull` falls back to the old guessed name.
+
 ## Licensing
 
 - Google's scripts: Apache 2.0.

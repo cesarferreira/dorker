@@ -130,7 +130,8 @@ impl Fake {
             .env_remove("FAKE_EMU_CRASH")
             .env_remove("FAKE_NOT_BOOTING")
             .env_remove("FAKE_BLANK")
-            .env_remove("FAKE_BLANK_FILE");
+            .env_remove("FAKE_BLANK_FILE")
+            .env_remove("FAKE_LIST_FILE");
         c
     }
 
@@ -546,6 +547,11 @@ fn screenshot_waits_for_a_non_blank_frame_but_never_blocks_forever() {
 const ANDROID_CLI: &str = r#"#!/bin/sh
 # Stub of `android --sdk=ROOT sdk install PACKAGE`. Real tools exit 0 even for unknown packages.
 root=${1#--sdk=}
+if [ "$2" = "sdk" ] && [ "$3" = "list" ]; then
+  # `android sdk list --all <pattern>`: print a canned repository listing if the test gave one.
+  [ -n "$FAKE_LIST_FILE" ] && [ -f "$FAKE_LIST_FILE" ] && { echo "Available packages:"; cat "$FAKE_LIST_FILE"; exit 0; }
+  exit 2
+fi
 [ "$2" = "sdk" ] && [ "$3" = "install" ] || { echo "unexpected args: $*" >&2; exit 2; }
 pkg=$4
 echo "$*" > "$FAKE_PIDDIR/android-args.txt"
@@ -727,5 +733,174 @@ fn legacy_sdkmanager_is_not_given_the_licence_notice() {
     assert!(
         !text(&out.stderr).contains("on your behalf"),
         "the legacy tool prompts for licences itself"
+    );
+}
+
+/// A repository listing in the format `android sdk list --all` prints, for the host ABI and the
+/// other one, with the API 37 naming that broke `dorker pull` (android-37.0, ps16k flavours).
+fn repo_listing(f: &Fake) -> PathBuf {
+    let other = if host_abi() == "arm64-v8a" {
+        "x86_64"
+    } else {
+        "arm64-v8a"
+    };
+    let mut text = String::new();
+    for (path, desc) in [
+        ("android-37.0/google_apis", "Google APIs"),
+        ("android-37.0/google_apis_playstore", "Google Play"),
+        ("android-37.0/google_atd", "Google APIs ATD"),
+        (
+            "android-37.1/google_apis_ps16k",
+            "16 KB Page Size Google APIs",
+        ),
+        ("android-37.2-beta1/google_apis_ps16k", "16 KB beta"),
+        ("android-CANARY/google_apis_ps16k", "canary"),
+        ("android-38.1/google_apis_ps16k", "16 KB only"),
+    ] {
+        for abi in [host_abi(), other] {
+            text.push_str(&format!(
+                "  system-images/{path}/{abi}      8.0.0      {desc} System Image\n"
+            ));
+        }
+    }
+    let file = f.root.join("repo-listing.txt");
+    std::fs::write(&file, text).unwrap();
+    file
+}
+
+#[test]
+fn pull_installs_the_published_package_name_not_a_guessed_one() {
+    let _guard = serial();
+    let f = Fake::new("pull-discover", false);
+    write_exec(&f.sdk.join("cmdline-tools/latest/bin/android"), ANDROID_CLI);
+    let listing = repo_listing(&f);
+
+    // android:37 used to look for `android-37`, which is not published (it is `android-37.0`).
+    let out = f
+        .cmd(&["pull", "android:37"])
+        .env("FAKE_LIST_FILE", &listing)
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let abi = host_abi();
+    assert!(
+        text(&out.stderr).contains(&format!(
+            "android:37 is published as system-images/android-37.0/google_apis/{abi}"
+        )),
+        "{}",
+        text(&out.stderr)
+    );
+    let args = std::fs::read_to_string(f.piddir.join("android-args.txt")).unwrap();
+    assert!(
+        args.contains(&format!(
+            "sdk install system-images;android-37.0;google_apis;{abi}"
+        )),
+        "{args}"
+    );
+
+    // ...and the installed image is then what `run android:37` uses.
+    let run = f.run(&["run", "-d", "--json", "android:37"]);
+    assert_eq!(code(&run), 0, "{}", text(&run.stderr));
+    assert_eq!(
+        code(&f.run(&["pull", "android:37"])),
+        0,
+        "a second pull is a no-op"
+    );
+}
+
+#[test]
+fn pull_picks_a_16kb_flavour_when_that_is_all_a_release_publishes() {
+    let _guard = serial();
+    let f = Fake::new("pull-ps16k", false);
+    write_exec(&f.sdk.join("cmdline-tools/latest/bin/android"), ANDROID_CLI);
+    let listing = repo_listing(&f);
+    let out = f
+        .cmd(&["pull", "android:37.1"])
+        .env("FAKE_LIST_FILE", &listing)
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let args = std::fs::read_to_string(f.piddir.join("android-args.txt")).unwrap();
+    assert!(
+        args.contains(&format!(
+            "system-images;android-37.1;google_apis_ps16k;{}",
+            host_abi()
+        )),
+        "{args}"
+    );
+    // A release with no .0 image: the only stable one is used (38.1 here).
+    let out = f
+        .cmd(&["pull", "android:38"])
+        .env("FAKE_LIST_FILE", &listing)
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr)
+            .contains("android:38 is published as system-images/android-38.1/google_apis_ps16k"),
+        "{}",
+        text(&out.stderr)
+    );
+    // Preview releases are never chosen: 37.2 is only published as a beta.
+    let out = f
+        .cmd(&["pull", "android:37.2"])
+        .env("FAKE_LIST_FILE", &listing)
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 3, "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("publishes no stable system image for android:37.2"),
+        "{}",
+        text(&out.stderr)
+    );
+}
+
+#[test]
+fn pull_lists_what_exists_when_nothing_matches() {
+    let _guard = serial();
+    let f = Fake::new("pull-unavailable", false);
+    write_exec(&f.sdk.join("cmdline-tools/latest/bin/android"), ANDROID_CLI);
+    let listing = repo_listing(&f);
+
+    let out = f
+        .cmd(&["pull", "android:37-nonexistent"])
+        .env("FAKE_LIST_FILE", &listing)
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 3, "{}", text(&out.stderr));
+    let err = text(&out.stderr);
+    assert!(
+        err.contains("no system image matches android:37-nonexistent"),
+        "{err}"
+    );
+    assert!(
+        err.contains("android:37.0-google_apis "),
+        "lists the real references: {err}"
+    );
+    assert!(err.contains("android:37.1-google_apis_ps16k"), "{err}");
+    assert!(
+        err.contains("Try: dorker pull android:37.0-google_apis"),
+        "suggests the best one: {err}"
+    );
+    assert!(
+        !err.contains("beta") && !err.contains("CANARY"),
+        "previews are not offered: {err}"
+    );
+    assert!(
+        !std::fs::exists(f.piddir.join("android-args.txt")).unwrap(),
+        "nothing was installed"
+    );
+
+    // An API the repository does not publish at all.
+    let out = f
+        .cmd(&["pull", "android:99"])
+        .env("FAKE_LIST_FILE", &listing)
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 3);
+    assert!(
+        text(&out.stderr).contains("publishes no stable system image for android:99"),
+        "{}",
+        text(&out.stderr)
     );
 }

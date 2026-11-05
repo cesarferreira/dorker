@@ -241,6 +241,112 @@ pub fn package_for(image: &ImageRef) -> String {
     )
 }
 
+/// A system image published in the SDK repository (a line of `android sdk list --all`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteImage {
+    /// Package path, e.g. `system-images/android-37.0/google_apis/x86_64`.
+    pub path: String,
+    pub api: u32,
+    pub minor: Option<u32>,
+    pub flavour: String,
+    pub abi: String,
+}
+
+impl RemoteImage {
+    /// The legacy `;`-separated package id, the form `SystemImage::package` uses.
+    pub fn package_id(&self) -> String {
+        self.path.replace('/', ";")
+    }
+
+    /// The image reference that selects exactly this image, e.g. `android:37.0-google_apis`.
+    pub fn reference(&self) -> String {
+        format!(
+            "android:{}-{}",
+            version_label(self.api, self.minor),
+            self.flavour
+        )
+    }
+}
+
+/// Stable system images in `android sdk list --all` output. Canary, beta and other
+/// preview directories (`android-CANARY`, `android-37.2-beta1`, ...) are skipped.
+pub fn parse_remote_images(list_output: &str) -> Vec<RemoteImage> {
+    let mut out = Vec::new();
+    for line in list_output.lines() {
+        let Some(path) = line
+            .split_whitespace()
+            .next()
+            .filter(|p| p.starts_with("system-images/"))
+        else {
+            continue;
+        };
+        let parts: Vec<&str> = path.split('/').collect();
+        let [_, version_dir, flavour, abi] = parts.as_slice() else {
+            continue;
+        };
+        let Some((api, minor)) = version_dir.strip_prefix("android-").and_then(parse_api) else {
+            continue; // android-CANARY, android-37.2-beta1, android-canary-2026...
+        };
+        out.push(RemoteImage {
+            path: path.to_string(),
+            api,
+            minor,
+            flavour: flavour.to_string(),
+            abi: abi.to_string(),
+        });
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out.dedup();
+    out
+}
+
+/// Preference among phone flavours when none is requested; lower is better. `None` means the
+/// flavour is not a default choice (Wear, TV, tablet, automotive...): only chosen explicitly.
+pub fn flavour_rank(flavour: &str) -> Option<u8> {
+    Some(match flavour {
+        "google_apis" => 0,
+        "default" => 1,
+        "aosp_atd" => 2,
+        "google_atd" => 3,
+        "google_apis_ps16k" => 4,
+        "google_apis_playstore" => 5,
+        "google_apis_playstore_ps16k" => 6,
+        _ => return None,
+    })
+}
+
+/// Pick the published image an image reference means, for `abi`. Without an explicit minor the
+/// base release wins (`android-37`, then `37.0`, then the newest minor); without an explicit
+/// flavour the best phone flavour wins. `Err` carries every image published for that API and
+/// ABI, so the caller can show the user what exists.
+pub fn choose_remote(
+    images: &[RemoteImage],
+    r: &ImageRef,
+    abi: &str,
+) -> Result<RemoteImage, Vec<RemoteImage>> {
+    let for_api: Vec<&RemoteImage> = images
+        .iter()
+        .filter(|i| i.api == r.api && i.abi == abi && r.minor.is_none_or(|m| i.minor == Some(m)))
+        .collect();
+    let minor_pref = |m: Option<u32>| match m {
+        None => (0, 0),
+        Some(0) => (1, 0),
+        Some(m) => (2, u32::MAX - m), // newest minor first
+    };
+    let best = for_api
+        .iter()
+        .filter_map(|i| match &r.flavour {
+            Some(f) if &i.flavour == f => Some((minor_pref(i.minor), 0, *i)),
+            Some(_) => None,
+            None => flavour_rank(&i.flavour).map(|rank| (minor_pref(i.minor), rank, *i)),
+        })
+        .min_by_key(|(m, rank, _)| (*m, *rank));
+    match best {
+        Some((_, _, img)) => Ok(img.clone()),
+        None => Err(for_api.into_iter().cloned().collect()),
+    }
+}
+
 /// `36` or `36.1`.
 pub fn version_label(api: u32, minor: Option<u32>) -> String {
     match minor {
@@ -397,6 +503,159 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("dorker pull android:34"));
         assert!(err.to_string().contains("android sdk install"));
+    }
+
+    /// Lines copied from real `android sdk list --all "system-images/android-37*"` output.
+    const LIST_37: &str = "Installed packages:
+  system-images/android-37.0/google_apis_playstore_ps16k/arm64-v8a               7.0.0   ->        8.0.0  16 KB Page Size Google Play ARM 64 v8a System Image
+Available packages:
+  system-images/android-37.0/android-wear-signed/x86_64                          1.0.0                    Wear OS 7.0 Intel x86_64 Atom System Image (signed)
+  system-images/android-37.0/aosp_atd/x86_64                                     1.0.0                    AOSP ATD Intel x86_64 Atom System Image
+  system-images/android-37.0/default/x86_64                                      6.0.0                    Intel x86_64 Atom System Image
+  system-images/android-37.0/google_apis/arm64-v8a                               8.0.0                    Google APIs ARM 64 v8a System Image
+  system-images/android-37.0/google_apis/x86_64                                  8.0.0                    Google APIs Intel x86_64 Atom System Image
+  system-images/android-37.0/google_apis_playstore/x86_64                        8.0.0                    Google Play Intel x86_64 Atom System Image
+  system-images/android-37.0/google_apis_ps16k/x86_64                            8.0.0                    16 KB Page Size Google APIs Intel x86_64 Atom System Image
+  system-images/android-37.0/google_atd/x86_64                                   7.0.0                    Google APIs ATD Intel x86_64 Atom System Image
+  system-images/android-37.1/google_apis_playstore_ps16k/x86_64                  9.0.0                    16 KB Page Size Google Play Intel x86_64 Atom System Image
+  system-images/android-37.1/google_apis_ps16k/x86_64                            9.0.0                    16 KB Page Size Google APIs Intel x86_64 Atom System Image
+  system-images/android-37.2-beta1/google_apis_ps16k/x86_64                      1.0.0                    16 KB Page Size Google APIs Intel x86_64 Atom System Image
+  system-images/android-CANARY/google_apis_ps16k/x86_64                          15.0.0                   16 KB Page Size Google APIs Intel x86_64 Atom System Image
+  system-images/android-canary-20261104/google_apis_ps16k/x86_64                 18.0.0                   16 KB Page Size Google APIs Intel x86_64 Atom System Image
+";
+
+    #[test]
+    fn parses_the_real_repository_listing_and_skips_previews() {
+        let imgs = parse_remote_images(LIST_37);
+        assert_eq!(imgs.len(), 11, "{imgs:#?}");
+        assert!(imgs.iter().all(|i| i.api == 37));
+        assert!(
+            imgs.iter()
+                .any(|i| i.path == "system-images/android-37.0/google_apis/x86_64")
+        );
+        assert!(!imgs.iter().any(|i| i.path.contains("beta")
+            || i.path.contains("CANARY")
+            || i.path.contains("canary")));
+        let one = imgs
+            .iter()
+            .find(|i| i.path.ends_with("android-37.1/google_apis_ps16k/x86_64"))
+            .unwrap();
+        assert_eq!(
+            (one.minor, one.flavour.as_str(), one.abi.as_str()),
+            (Some(1), "google_apis_ps16k", "x86_64")
+        );
+        assert_eq!(
+            one.package_id(),
+            "system-images;android-37.1;google_apis_ps16k;x86_64"
+        );
+        assert_eq!(one.reference(), "android:37.1-google_apis_ps16k");
+        assert!(parse_remote_images("garbage\nplatforms/android-34 1 x").is_empty());
+    }
+
+    #[test]
+    fn android_37_means_the_base_release_with_the_best_phone_flavour() {
+        // The bug: dorker asked for `android-37`, which is not published; it is `android-37.0`.
+        let imgs = parse_remote_images(LIST_37);
+        let pick = choose_remote(&imgs, &ImageRef::parse("android:37").unwrap(), "x86_64").unwrap();
+        assert_eq!(pick.path, "system-images/android-37.0/google_apis/x86_64");
+        // arm64 has its own images.
+        let arm =
+            choose_remote(&imgs, &ImageRef::parse("android:37").unwrap(), "arm64-v8a").unwrap();
+        assert_eq!(arm.path, "system-images/android-37.0/google_apis/arm64-v8a");
+    }
+
+    #[test]
+    fn explicit_minor_and_flavour_are_honoured() {
+        let imgs = parse_remote_images(LIST_37);
+        let pick = |r: &str| choose_remote(&imgs, &ImageRef::parse(r).unwrap(), "x86_64");
+        // 37.1 only publishes 16 KB flavours: the best of those is chosen.
+        assert_eq!(
+            pick("android:37.1").unwrap().path,
+            "system-images/android-37.1/google_apis_ps16k/x86_64"
+        );
+        assert_eq!(
+            pick("android:37-google_apis_playstore").unwrap().path,
+            "system-images/android-37.0/google_apis_playstore/x86_64"
+        );
+        assert_eq!(
+            pick("android:37.1-google_apis_playstore_ps16k")
+                .unwrap()
+                .minor,
+            Some(1)
+        );
+        // Non-phone flavours are never a default, only an explicit choice.
+        assert_eq!(pick("android:37-google_atd").unwrap().flavour, "google_atd");
+        assert!(pick("android:37-android-wear-signed").is_ok());
+    }
+
+    #[test]
+    fn unavailable_requests_return_what_does_exist() {
+        let imgs = parse_remote_images(LIST_37);
+        let err = choose_remote(
+            &imgs,
+            &ImageRef::parse("android:37-nonexistent").unwrap(),
+            "x86_64",
+        )
+        .unwrap_err();
+        assert!(
+            err.iter().any(|i| i.flavour == "google_apis") && err.len() >= 8,
+            "{err:?}"
+        );
+        assert!(
+            choose_remote(&imgs, &ImageRef::parse("android:99").unwrap(), "x86_64")
+                .unwrap_err()
+                .is_empty()
+        );
+        assert!(
+            choose_remote(&imgs, &ImageRef::parse("android:37.9").unwrap(), "x86_64")
+                .unwrap_err()
+                .is_empty()
+        );
+        // Only non-default flavours published for an API: nothing is picked automatically.
+        let only_wear: Vec<RemoteImage> = imgs
+            .iter()
+            .filter(|i| i.flavour == "android-wear-signed")
+            .cloned()
+            .collect();
+        assert!(
+            choose_remote(
+                &only_wear,
+                &ImageRef::parse("android:37").unwrap(),
+                "x86_64"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn plain_major_beats_a_minor_release_and_newest_minor_wins_otherwise() {
+        let mk = |p: &str| parse_remote_images(&format!("  {p}  1.0.0  x"));
+        let mut imgs = mk("system-images/android-36/google_apis/x86_64");
+        imgs.extend(mk("system-images/android-36.1/google_apis/x86_64"));
+        let r = ImageRef::parse("android:36").unwrap();
+        assert_eq!(
+            choose_remote(&imgs, &r, "x86_64").unwrap().minor,
+            None,
+            "plain android-36 first"
+        );
+        let mut only_minors = mk("system-images/android-40.0/google_apis/x86_64");
+        only_minors.extend(mk("system-images/android-40.2/google_apis/x86_64"));
+        only_minors.extend(mk("system-images/android-40.1/google_apis/x86_64"));
+        let r = ImageRef::parse("android:40").unwrap();
+        assert_eq!(
+            choose_remote(&only_minors, &r, "x86_64").unwrap().minor,
+            Some(0),
+            "base release .0 first"
+        );
+        let no_zero: Vec<RemoteImage> = only_minors
+            .into_iter()
+            .filter(|i| i.minor != Some(0))
+            .collect();
+        assert_eq!(
+            choose_remote(&no_zero, &r, "x86_64").unwrap().minor,
+            Some(2),
+            "then the newest minor"
+        );
     }
 
     #[test]

@@ -580,6 +580,68 @@ fn image_from_dorkerfile(file: Option<&Path>) -> Result<String> {
 /// Install a system image with the SDK's own package tool: `android sdk install`, or the legacy
 /// `sdkmanager` on older command-line tools. The new CLI accepts the SDK licence without
 /// asking (verified), so `pull` prints a notice first; the legacy tool prompts by itself.
+enum Discovery {
+    /// The repository publishes a matching image.
+    Chosen(crate::sdk::RemoteImage),
+    /// The repository was read, but nothing matches; carries what exists for that API and ABI.
+    Unavailable(Vec<crate::sdk::RemoteImage>),
+    /// Could not read the repository (legacy `sdkmanager`, offline...): fall back to guessing.
+    Unknown,
+}
+
+fn discover_remote(sdk: &Sdk, installer: &crate::sdk::Installer, r: &ImageRef) -> Discovery {
+    let crate::sdk::Installer::AndroidCli(cli) = installer else {
+        return Discovery::Unknown;
+    };
+    let out = std::process::Command::new(cli)
+        .arg(format!("--sdk={}", sdk.root.display()))
+        .args([
+            "sdk",
+            "list",
+            "--all",
+            &format!("system-images/android-{}*", r.api),
+        ])
+        .stdin(std::process::Stdio::null())
+        .output();
+    let Ok(out) = out else {
+        return Discovery::Unknown;
+    };
+    let images = crate::sdk::parse_remote_images(&String::from_utf8_lossy(&out.stdout));
+    if !out.status.success() || images.is_empty() {
+        crate::log::vlog!("could not read the repository listing; guessing the package name");
+        return Discovery::Unknown;
+    }
+    match crate::sdk::choose_remote(&images, r, crate::sdk::host_abi()) {
+        Ok(img) => Discovery::Chosen(img),
+        Err(candidates) => Discovery::Unavailable(candidates),
+    }
+}
+
+/// An error that says what exists instead of "probably does not exist".
+fn unavailable_message(r: &ImageRef, candidates: &[crate::sdk::RemoteImage]) -> String {
+    let abi = crate::sdk::host_abi();
+    if candidates.is_empty() {
+        return format!(
+            "the SDK repository publishes no stable system image for {r} on {abi}\n\nSee what exists with: android sdk list --all system-images"
+        );
+    }
+    let mut msg = format!(
+        "no system image matches {r} on {abi}. Published for API {}:\n",
+        r.api
+    );
+    for c in candidates {
+        msg.push_str(&format!("  {:<44} ({})\n", c.reference(), c.package_id()));
+    }
+    let suggestion = candidates
+        .iter()
+        .min_by_key(|c| crate::sdk::flavour_rank(&c.flavour).unwrap_or(99))
+        .map_or(String::new(), |c| {
+            format!("\nTry: dorker pull {}", c.reference())
+        });
+    msg.push_str(&suggestion);
+    msg
+}
+
 pub fn pull(image: Option<&str>, file: Option<&Path>) -> Result<i32> {
     let dep = errors::with(errors::DEPENDENCY);
     let image = match image {
@@ -592,9 +654,9 @@ pub fn pull(image: Option<&str>, file: Option<&Path>) -> Result<i32> {
     };
     let r = ImageRef::parse(&image).map_err(errors::with(errors::CONFIG))?;
     let sdk = Sdk::locate().map_err(dep)?;
-    let package = crate::sdk::package_for(&r);
-    if sdk.system_images().iter().any(|i| i.package == package) {
-        println!("{package} is already installed");
+    // Already usable? `resolve` is exactly what `dorker run` / `build` would pick.
+    if let Ok(img) = sdk.resolve(&r) {
+        println!("{} is already installed", img.package);
         return Ok(0);
     }
     let Some(installer) = sdk.package_installer() else {
@@ -613,10 +675,30 @@ pub fn pull(image: Option<&str>, file: Option<&Path>) -> Result<i32> {
             .join("android-sdk-license")
             .is_file()
     {
+        let arm = if crate::sdk::host_abi() == "arm64-v8a" {
+            "\n      (for arm64 images that includes the ARM binary-translation licence)."
+        } else {
+            ""
+        };
         eprintln!(
-            "note: Google's `android` CLI accepts the Android SDK licences on your behalf when it installs packages\n      (for arm64 images that includes the ARM binary-translation licence).\n      Read them first: https://developer.android.com/studio/terms (Ctrl-C now to stop)."
+            "note: Google's `android` CLI accepts the Android SDK licences on your behalf when it installs packages{arm}\n      Read them first: https://developer.android.com/studio/terms (Ctrl-C now to stop)."
         );
     }
+    // Ask the repository what is actually published instead of guessing a package name: API 37
+    // is `android-37.0` (not `android-37`), and some APIs only publish 16 KB-page flavours.
+    let package = match discover_remote(&sdk, &installer, &r) {
+        Discovery::Chosen(img) => {
+            eprintln!("{r} is published as {}", img.path);
+            img.package_id()
+        }
+        Discovery::Unavailable(candidates) => {
+            return Err(dep(anyhow::anyhow!(
+                "{}",
+                unavailable_message(&r, &candidates)
+            )));
+        }
+        Discovery::Unknown => crate::sdk::package_for(&r),
+    };
     eprintln!(
         "Installing {package} with {} ({})",
         installer.name(),
