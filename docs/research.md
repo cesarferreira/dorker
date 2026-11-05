@@ -122,6 +122,13 @@ Ubuntu 24.04 Azure VM with nested KVM, emulator 37.2.12.0, the SDK's own `qemu-s
   read from `/proc`, and startup tolerates a pre-exec window, but I could not reproduce the failure,
   so this fix is **unproven**. The error message now includes the command line last seen.
 
+## Network exposure (PRD 14.1), verified on macOS
+
+With a running instance (emulator 37.2.12.0, macOS), `lsof` shows the emulator process listening
+on the console port (5554), the ADB port (5555) and its ephemeral service ports **only on
+`127.0.0.1` and `[::1]`**, with no UDP sockets and nothing bound to a non-loopback address.
+dorker passes no option that widens this. Not yet re-checked on Linux.
+
 ## Licensing
 
 - Google's scripts: Apache 2.0.
