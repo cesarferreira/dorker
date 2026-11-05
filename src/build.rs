@@ -429,7 +429,20 @@ fn provision(
     apks: &[ResolvedApk],
     timeout: u64,
 ) -> Result<()> {
-    eprintln!("Booting build instance ({})...", inst.serial());
+    // Number the steps so a long build shows how far along it is.
+    let persists = !apks.is_empty() || !df.settings.is_empty();
+    let total = 1
+        + apks.len()
+        + usize::from(!df.settings.is_empty())
+        + usize::from(persists)
+        + usize::from(df.snapshot.is_some());
+    let st = crate::style::Style::stderr();
+    let mut n = 0;
+    let mut step = |text: String| {
+        n += 1;
+        eprintln!("{} {text}", st.cyan(&format!("[{n}/{total}]")));
+    };
+    step(format!("Booting build instance ({})...", inst.serial()));
     runtime::wait_ready(
         sdk,
         store,
@@ -440,11 +453,19 @@ fn provision(
     )?;
     let serial = inst.serial();
     for apk in apks {
-        eprintln!("Installing {}", apk.written);
+        step(format!("Installing {}", apk.written));
         crate::xapk::install(sdk, &serial, &apk.path, &apk.written)?;
     }
+    if !df.settings.is_empty() {
+        let keys: Vec<&str> = df.settings.iter().map(|s| s.key.as_str()).collect();
+        step(format!(
+            "Applying {} setting{} ({})",
+            keys.len(),
+            if keys.len() == 1 { "" } else { "s" },
+            keys.join(", ")
+        ));
+    }
     for s in &df.settings {
-        eprintln!("Setting {} {} = {}", s.namespace, s.key, s.value);
         adb_checked(
             sdk,
             &serial,
@@ -456,7 +477,7 @@ fn provision(
         // Android persists settings and the package database lazily, and an adb
         // reboot is abrupt, so give it time to flush, reboot, then prove the state
         // survived. Otherwise a cold boot of the image would silently lose it.
-        eprintln!("Persisting provisioned state (flush, reboot, verify)");
+        step("Persisting provisioned state: flush, reboot, verify (about 40s)".to_string());
         let flush_until = std::time::Instant::now() + FLUSH_DELAY;
         while std::time::Instant::now() < flush_until && !runtime::interrupted() {
             std::thread::sleep(Duration::from_millis(250));
@@ -481,7 +502,7 @@ fn provision(
         }
     }
     if let Some(name) = &df.snapshot {
-        eprintln!("Saving snapshot {name:?}");
+        step(format!("Saving snapshot {name:?}"));
         let out = adb_checked(
             sdk,
             &serial,

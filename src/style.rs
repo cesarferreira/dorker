@@ -34,6 +34,12 @@ impl Style {
         Style { on }
     }
 
+    /// Like `stdout()`, for text written to stderr (progress lines).
+    pub fn stderr() -> Self {
+        let on = color_enabled(std::io::stderr().is_terminal(), &|k| std::env::var(k).ok());
+        Style { on }
+    }
+
     fn paint(&self, code: &str, s: &str) -> String {
         if self.on {
             format!("\x1b[{code}m{s}\x1b[0m")
