@@ -203,6 +203,14 @@ fn warn_on_drift(lock_path: &Path, i: &Inputs) {
 }
 
 pub fn build(a: BuildArgs) -> Result<i32> {
+    let meta = build_image(&a)?;
+    println!("{}", meta.id);
+    Ok(0)
+}
+
+/// Build (or find in the cache) the image a Dorkerfile describes. Progress goes to stderr and
+/// nothing is printed to stdout, so callers such as `dorker run` can use it quietly.
+pub fn build_image(a: &BuildArgs) -> Result<ImageMeta> {
     let context = a
         .context
         .canonicalize()
@@ -320,8 +328,7 @@ pub fn build(a: BuildArgs) -> Result<i32> {
     std::fs::write(&lock_path, render_lock(&inputs, &fp))
         .with_context(|| format!("writing {}", lock_path.display()))?;
     eprintln!("Wrote {}", lock_path.display());
-    println!("{}", meta.id);
-    Ok(0)
+    Ok(meta)
 }
 
 fn build_new(

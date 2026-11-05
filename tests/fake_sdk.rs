@@ -114,6 +114,12 @@ impl Fake {
             let img = sdk.join(format!("system-images/android-35/google_apis/{abi}"));
             std::fs::create_dir_all(&img).unwrap();
             std::fs::write(img.join("system.img"), b"x").unwrap();
+            // A build reads the image's revision from its package.xml.
+            std::fs::write(
+                img.join("package.xml"),
+                "<localPackage><revision><major>1</major></revision></localPackage>",
+            )
+            .unwrap();
         }
         Fake {
             root,
@@ -1203,6 +1209,153 @@ fn a_pull_that_cannot_succeed_still_reports_what_exists() {
     assert_eq!(code(&out), 3, "{}", text(&out.stderr));
     assert!(
         text(&out.stderr).contains("dorker versions"),
+        "{}",
+        text(&out.stderr)
+    );
+}
+
+// ---------- `dorker run` with no image: build and run the Dorkerfile here ----------
+
+#[test]
+fn run_without_an_image_builds_and_runs_the_dorkerfile_in_this_folder() {
+    let _guard = serial();
+    let f = Fake::new("run-dorkerfile", true);
+    let ctx = f.root.join("proj");
+    std::fs::create_dir_all(&ctx).unwrap();
+    std::fs::write(ctx.join("Dorkerfile"), "FROM android:35\n").unwrap();
+    let in_ctx = |args: &[&str]| f.cmd(args).current_dir(&ctx).output().unwrap();
+
+    // First run: builds the image, then starts an instance of it.
+    let out = in_ctx(&["run", "-d", "--json", "--name", "one"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let inst: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout is only the JSON");
+    assert_eq!(inst["status"], "READY");
+    assert!(
+        text(&out.stderr).contains("Built image"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert!(
+        text(&out.stderr).contains("Running image"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert!(
+        ctx.join("Dorkerfile.lock").is_file(),
+        "it is a normal build, so the lockfile is written"
+    );
+    let image_id = inst["image"].as_str().unwrap().to_string();
+    assert_eq!(image_id.len(), 12, "{inst}");
+
+    // Second run: nothing changed, so the build is a cache hit and the same image is used.
+    let out = in_ctx(&["run", "-d", "--json", "--name", "two"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("Using cached image"),
+        "{}",
+        text(&out.stderr)
+    );
+    let second: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(second["image"], image_id.as_str());
+    assert_eq!(
+        f.live_emulators().len(),
+        2,
+        "two isolated instances of one image"
+    );
+
+    // Edit the Dorkerfile: `run` now starts the *current* configuration (a new image).
+    std::fs::write(ctx.join("Dorkerfile"), "FROM android:35\nMEMORY 3GB\n").unwrap();
+    let out = in_ctx(&["run", "-d", "--json", "--name", "three"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let third: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_ne!(
+        third["image"],
+        image_id.as_str(),
+        "a changed Dorkerfile means a new image"
+    );
+    assert_eq!(third["memory_mb"], 3072, "the new setting is what runs");
+    assert_eq!(second["memory_mb"], 2048);
+
+    // -f points at a Dorkerfile elsewhere; relative paths inside it resolve next to that file.
+    let other = f.root.join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("Custom.dorker"), "FROM android:35\nCPUS 1\n").unwrap();
+    let out = f
+        .cmd(&[
+            "run",
+            "-d",
+            "--json",
+            "--name",
+            "four",
+            "-f",
+            other.join("Custom.dorker").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()["cpus"],
+        1
+    );
+}
+
+#[test]
+fn run_without_an_image_explains_missing_or_broken_dorkerfiles() {
+    let _guard = serial();
+    let f = Fake::new("run-dorkerfile-errors", true);
+    let empty = f.root.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+
+    let out = f.cmd(&["run", "-d"]).current_dir(&empty).output().unwrap();
+    assert_eq!(code(&out), 2, "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("no image given and no Dorkerfile"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert!(
+        text(&out.stderr).contains("dorker run android:35"),
+        "{}",
+        text(&out.stderr)
+    );
+
+    // A broken Dorkerfile reports its position, exactly like `dorker build`.
+    std::fs::write(empty.join("Dorkerfile"), "FROM android:35\nMEM 2GB\n").unwrap();
+    let out = f.cmd(&["run", "-d"]).current_dir(&empty).output().unwrap();
+    assert_eq!(code(&out), 2);
+    assert!(
+        text(&out.stderr).starts_with("Dorkerfile:2:1"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert!(f.live_emulators().is_empty(), "nothing was started");
+
+    // An image and -f together are ambiguous.
+    let out = f
+        .cmd(&["run", "-d", "android:35", "-f", "Dorkerfile"])
+        .current_dir(&empty)
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 2, "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("only applies when no image is given"),
+        "{}",
+        text(&out.stderr)
+    );
+
+    // A build failure inside `run` keeps build's exit code (here: missing system image).
+    let bare = Fake::new("run-dorkerfile-noimage", false);
+    std::fs::create_dir_all(bare.root.join("p")).unwrap();
+    std::fs::write(bare.root.join("p/Dorkerfile"), "FROM android:35\n").unwrap();
+    let out = bare
+        .cmd(&["run", "-d"])
+        .current_dir(bare.root.join("p"))
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 3, "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("--pull"),
         "{}",
         text(&out.stderr)
     );

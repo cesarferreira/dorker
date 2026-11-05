@@ -144,7 +144,12 @@ enum Command {
     },
     /// Launch an instance from an image (e.g. android:35)
     Run {
-        image: String,
+        /// Image to run (e.g. android:35 or myapp:latest). Omit it to build and run the
+        /// Dorkerfile in this folder.
+        image: Option<String>,
+        /// Dorkerfile to run when no image is given (default: ./Dorkerfile)
+        #[arg(short, long)]
+        file: Option<std::path::PathBuf>,
         /// Instance name (default: generated)
         #[arg(long)]
         name: Option<String>,
@@ -282,6 +287,7 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Doctor { json } => doctor::run(json),
         Command::Run {
             image,
+            file,
             name,
             detach,
             rm,
@@ -292,19 +298,22 @@ fn run(cli: Cli) -> Result<i32> {
             gpu,
             json,
             pull,
-        } => commands::run(commands::RunArgs {
-            image,
-            name,
-            detach,
-            rm,
-            memory,
-            cpus,
-            adb_port,
-            timeout,
-            gpu,
-            json,
-            pull,
-        }),
+        } => {
+            let image = commands::run_target(image, file.as_deref(), timeout, pull)?;
+            commands::run(commands::RunArgs {
+                image,
+                name,
+                detach,
+                rm,
+                memory,
+                cpus,
+                adb_port,
+                timeout,
+                gpu,
+                json,
+                pull,
+            })
+        }
         Command::Build {
             context,
             file,

@@ -394,6 +394,47 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
     })
 }
 
+/// What `dorker run` starts. With an image it is that image; without one it is the Dorkerfile in
+/// this folder (or `-f`), built first. A cached build is instant, so `dorker run` always starts
+/// the environment the Dorkerfile currently describes.
+pub fn run_target(
+    image: Option<String>,
+    file: Option<&Path>,
+    timeout: u64,
+    pull: bool,
+) -> Result<String> {
+    let cfg = errors::with(errors::CONFIG);
+    if let Some(image) = image {
+        if file.is_some() {
+            return Err(cfg(anyhow::anyhow!(
+                "-f/--file only applies when no image is given (it names the Dorkerfile to run)"
+            )));
+        }
+        return Ok(image);
+    }
+    let path = file.map_or_else(|| PathBuf::from("Dorkerfile"), Path::to_path_buf);
+    if !path.is_file() {
+        return Err(cfg(anyhow::anyhow!(
+            "no image given and no Dorkerfile at {}\n\nName an image (`dorker run android:35`), or run this from a folder that has a Dorkerfile (or pass -f).",
+            path.display()
+        )));
+    }
+    let context = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let meta = crate::build::build_image(&crate::build::BuildArgs {
+        file: Some(path.clone()),
+        tag: None,
+        context,
+        timeout,
+        no_cache: false,
+        pull,
+    })?;
+    eprintln!("Running image {} built from {}", meta.id, path.display());
+    Ok(meta.id)
+}
+
 pub fn run(a: RunArgs) -> Result<i32> {
     if a.json && !a.detach {
         return Err(errors::with(errors::CONFIG)(anyhow::anyhow!(
@@ -871,7 +912,7 @@ pub fn init() -> Result<i32> {
          SNAPSHOT ready\n",
     )?;
     println!(
-        "Created Dorkerfile.\n\nNext:\n  dorker doctor\n  dorker build -t myapp:latest .\n  dorker run -d --name test myapp:latest\n\nSee docs/dorkerfile.md for every directive."
+        "Created Dorkerfile.\n\nNext:\n  dorker doctor\n  dorker run -d --name test      # builds this Dorkerfile and runs it\n  dorker rm -f test\n\nSee docs/dorkerfile.md for every directive."
     );
     Ok(0)
 }

@@ -44,6 +44,8 @@ Arbitrary host commands are not supported, by design.
 
 ## Builds and the lockfile
 
+`dorker run` with no image runs the Dorkerfile in the current folder (or `-f`): it builds first, which is instant when nothing changed, so it always starts the current configuration.
+
 `dorker build [-t repo:tag] [-f Dorkerfile] [context]` boots a build instance,
 applies the directives in order, saves the snapshot, and publishes an immutable
 image. The image id is a fingerprint of the system-image revision, emulator

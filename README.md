@@ -124,21 +124,26 @@ Then build the image once and run it as many times as you like:
 # Not sure which versions exist? List them (installed and available)
 dorker versions
 
-# Install the base image named by FROM, if it is missing
-dorker pull
-
-# Build once: installs your APK, applies settings, saves the snapshot
-dorker build -t myapp:latest .
-
-# Run as often as you like; each run starts from the snapshot
-dorker run -d --name t1 myapp:latest
+# Build the Dorkerfile in this folder (instant if nothing changed) and run it
+dorker run -d --name t1
 dorker screenshot t1 shot.png
 dorker test t1 \
   --runner com.example.app.test/androidx.test.runner.AndroidJUnitRunner
 dorker rm -f t1
 
-# Or run in the foreground; the instance is removed on Ctrl-C
-dorker run --rm myapp:latest
+# Or in the foreground; the instance is removed on Ctrl-C
+dorker run --rm
+```
+
+`dorker run` with no image always starts what the Dorkerfile *currently* says: it builds
+first, which is a cache hit when nothing changed, so edit the file and run again to get
+the new environment. Use `-f path/to/Dorkerfile` for a file elsewhere. For more control,
+the steps are separate commands, and an image can be named and reused:
+
+```bash
+dorker pull                              # install the FROM image if missing
+dorker build -t myapp:latest .           # APK, settings, snapshot, lockfile
+dorker run -d --name t1 myapp:latest     # run it by name, any time
 ```
 
 If the base image isn't installed, `dorker build` and `dorker run` offer to install
