@@ -37,6 +37,16 @@ pub fn median(v: &[f64]) -> Option<f64> {
     })
 }
 
+/// utime + stime (clock ticks) of a process, from `/proc/<pid>/stat`.
+fn proc_cpu_ticks(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // The command name (field 2) may contain spaces; fields resume after the last ')'.
+    let rest = stat.rsplit_once(')')?.1;
+    let f: Vec<&str> = rest.split_whitespace().collect();
+    // After ')': state is f[0] (field 3), so utime/stime (fields 14/15) are f[11]/f[12].
+    Some(f.get(11)?.parse::<u64>().ok()? + f.get(12)?.parse::<u64>().ok()?)
+}
+
 /// Idle CPU% (interval average) and RSS (MB) of a process.
 fn idle_usage(pid: u32) -> (Option<f64>, Option<f64>) {
     let rss = sh("ps", &["-o", "rss=", "-p", &pid.to_string()])
@@ -59,7 +69,18 @@ fn idle_usage(pid: u32) -> (Option<f64>, Option<f64>) {
         )
         .and_then(|o| o.lines().rev().find_map(|l| l.trim().parse::<f64>().ok()))
     } else {
-        sh("ps", &["-o", "%cpu=", "-p", &pid.to_string()]).and_then(|s| s.trim().parse().ok())
+        // `ps %cpu` is a lifetime average (it includes the boot burst), so sample
+        // /proc CPU time over an interval instead.
+        let ticks = sh("getconf", &["CLK_TCK"])
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(100.0);
+        let a = proc_cpu_ticks(pid);
+        std::thread::sleep(Duration::from_secs(3));
+        let b = proc_cpu_ticks(pid);
+        match (a, b) {
+            (Some(a), Some(b)) => Some((b.saturating_sub(a)) as f64 / ticks / 3.0 * 100.0),
+            _ => None,
+        }
     };
     (cpu, rss)
 }
@@ -191,6 +212,22 @@ pub fn run(a: BenchArgs) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proc_stat_parsing_handles_spaces_in_names() {
+        let own = proc_cpu_ticks(std::process::id());
+        if cfg!(target_os = "linux") {
+            assert!(own.is_some());
+        }
+        // Parsing logic on a synthetic line with a ')' and spaces inside the command.
+        let stat = "123 (qemu (x) y) S 1 123 123 0 -1 4194560 100 0 0 0 40 2 0 0 20 0 5 0 99 1 1";
+        let rest = stat.rsplit_once(')').unwrap().1;
+        let f: Vec<&str> = rest.split_whitespace().collect();
+        assert_eq!(
+            f[11].parse::<u64>().unwrap() + f[12].parse::<u64>().unwrap(),
+            42
+        );
+    }
 
     #[test]
     fn medians() {
