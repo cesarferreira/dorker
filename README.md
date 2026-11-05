@@ -186,6 +186,22 @@ Measured on an Apple M4 Pro, API 35, 2GB: cold boot about 15s, snapshot restore
 about 4s. Host memory is about 2.5GB after a cold boot and 3.3GB after a restore.
 Details and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 
+### Keep what you set up by hand
+
+Some state can only be made by using the device: accepting a consent screen, switching on
+a developer mode, signing in. Set it up on a running instance, then save it as an image:
+
+```bash
+dorker run -d --name setup myapp     # boot, then do the setup (scrcpy, adb)
+dorker commit setup -t myapp:ready   # snapshot it and save it as an image
+dorker run -d --name t1 myapp:ready  # starts exactly where you left off
+```
+
+`commit` saves a snapshot, stops the instance (its files must not change while they are
+copied) and copies it into the image store, so `dorker start setup` still brings the
+instance back with its data. A new instance restores the saved snapshot in a few seconds,
+with the app state that was on screen.
+
 ### See what is using disk
 
 ```bash

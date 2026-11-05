@@ -17,6 +17,21 @@ dorker rm -f auto
 Replace the `.xapk` with a newer one and the next `dorker build` or `dorker run` makes a
 new image, because the file's hash is part of the image identity.
 
+## Setting up the head unit server (once)
+
+Android Auto's developer mode is a setting inside the app, so installing the APK does not
+turn it on, and tools that drive a head unit (such as `aa`) report "head-unit server could
+not start". Do it once on an instance and save it as an image:
+
+```bash
+dorker run -d --name setup gearhead
+# Open Android Auto (scrcpy), then Settings: tap "Version" about 10 times,
+# accept the developer prompt and the first-run consent, then choose
+# More options > Start head unit server. The UI must be in English.
+dorker commit setup -t gearhead:ready
+dorker run -d --name auto gearhead:ready   # already set up
+```
+
 Notes:
 
 - It uses `FROM android:36-playstore` on purpose. The plain `google_apis` image carries an

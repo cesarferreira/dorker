@@ -29,6 +29,7 @@ if [ -n "$FAKE_EMU_CRASH" ]; then
   exit 1
 fi
 echo $$ > "$FAKE_PIDDIR/$port.pid"
+echo "$ANDROID_AVD_HOME" > "$FAKE_PIDDIR/$port.avdhome"
 trap 'exit 0' TERM INT
 while :; do sleep 1; done
 "#;
@@ -54,6 +55,9 @@ case "$1" in
       *) echo "fake: $*" ;;
     esac ;;
   emu)
+    if [ "$2" = "avd" ] && [ "$3" = "snapshot" ] && [ "$4" = "save" ]; then
+      mkdir -p "$(cat "$FAKE_PIDDIR/$port.avdhome")/dorker.avd/snapshots/$5" && echo OK
+    fi
     if [ "$2" = "kill" ] && [ -f "$FAKE_PIDDIR/$port.pid" ]; then kill "$(cat "$FAKE_PIDDIR/$port.pid")" 2>/dev/null; fi ;;
   exec-out)
     if [ "$3" = "-p" ]; then
@@ -1656,5 +1660,82 @@ fn ls_shows_images_instances_and_storage() {
             .any(|l| l.contains("web ") && l.contains("CRASHED")),
         "{}",
         text(&f.run(&["ls"]).stdout)
+    );
+}
+
+#[test]
+fn commit_saves_a_running_instance_as_a_new_image() {
+    let _guard = serial();
+    let f = Fake::new("commit", true);
+    let base = build_image(&f, "a", "MEMORY 2GB\n", Some("app:latest"));
+    assert_eq!(code(&f.run(&["run", "-d", "--name", "work", &base])), 0);
+    // Something the instance wrote after it started.
+    let avd_dir = std::fs::read_dir(f.home.join("instances"))
+        .unwrap()
+        .flatten()
+        .next()
+        .unwrap()
+        .path()
+        .join("avd");
+    std::fs::write(avd_dir.join("dorker.avd/userdata-marker"), b"kept").unwrap();
+
+    let out = f.run(&["commit", "work", "-t", "app:signed-in", "--json"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is only JSON");
+    let new_id = v["id"].as_str().unwrap().to_string();
+    assert_eq!(v["tag"], "app:signed-in");
+    assert_eq!(v["snapshot"], "committed");
+    assert!(text(&out.stderr).contains("[4/4]"), "{}", text(&out.stderr));
+
+    // The instance was stopped, not removed; the old image keeps its tag; the new one is tagged.
+    assert_eq!(ps_json(&f)[0]["status"], "STOPPED");
+    wait_until("emulator to exit", || f.live_emulators().is_empty());
+    let images: serde_json::Value =
+        serde_json::from_slice(&f.run(&["images", "--json"]).stdout).unwrap();
+    let find = |id: &str| {
+        images
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == id)
+            .unwrap_or_else(|| panic!("no image {id} in {images}"))
+            .clone()
+    };
+    assert_eq!(find(&base)["tags"], serde_json::json!(["app:latest"]));
+    assert_eq!(find(&new_id)["tags"], serde_json::json!(["app:signed-in"]));
+    assert_eq!(find(&new_id)["snapshot"], "committed");
+    // It carries the instance's files (and the snapshot), and no lock files.
+    let image_avd = f.home.join("images").join(&new_id).join("avd/dorker.avd");
+    assert_eq!(
+        std::fs::read(image_avd.join("userdata-marker")).unwrap(),
+        b"kept"
+    );
+    assert!(image_avd.join("snapshots/committed").is_dir());
+
+    // A new instance from the committed image starts and sees that state.
+    let run = f.run(&["run", "-d", "--json", "--name", "again", "app:signed-in"]);
+    assert_eq!(code(&run), 0, "{}", text(&run.stderr));
+
+    // Committing something that is not running fails with a clear message.
+    let bad = f.run(&["commit", "work"]);
+    assert_ne!(code(&bad), 0);
+    assert!(
+        text(&bad.stderr).contains("not READY"),
+        "{}",
+        text(&bad.stderr)
+    );
+    let missing = f.run(&["commit", "nope"]);
+    assert_ne!(code(&missing), 0);
+    assert!(text(&missing.stderr).contains("no such instance"));
+    // A bad tag is rejected before anything is touched.
+    let bad_tag = f.run(&["commit", "again", "-t", "Bad Tag"]);
+    assert_ne!(code(&bad_tag), 0);
+    assert_eq!(
+        ps_json(&f)
+            .iter()
+            .filter(|i| i["status"] == "READY")
+            .count(),
+        1,
+        "a rejected commit must leave the instance running"
     );
 }

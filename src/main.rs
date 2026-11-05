@@ -1,6 +1,7 @@
 mod bench;
 mod build;
 mod commands;
+mod commit;
 mod doctor;
 mod dorkerfile;
 mod errors;
@@ -272,6 +273,17 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Save a running instance as a new image (keeps what you set up on the device)
+    Commit {
+        /// Instance name or id (must be READY; it is stopped by the commit)
+        instance: String,
+        /// Name for the new image, e.g. `myapp:signed-in`
+        #[arg(short, long)]
+        tag: Option<String>,
+        /// Print the result as JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
     /// Stop a running instance
     Stop {
         #[arg(required = true)]
@@ -442,6 +454,11 @@ fn run(cli: Cli) -> Result<i32> {
             timeout,
             json,
         } => commands::start_existing(&instance, timeout, json),
+        Command::Commit {
+            instance,
+            tag,
+            json,
+        } => commit::run(&instance, tag.as_deref(), json),
         Command::Stop { instances } => commands::each(&instances, commands::stop),
         Command::Rm { instances, force } => commands::each(&instances, |i| commands::rm(i, force)),
     }

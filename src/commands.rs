@@ -88,7 +88,7 @@ fn patch_config(path: &std::path::Path, key: &str, value: &str) -> Result<()> {
 }
 
 /// How long a command waits for another command operating on the same instance.
-const OP_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const OP_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct Started {
     pub sdk: Sdk,
@@ -1026,6 +1026,21 @@ fn ready_instance(key: &str) -> Result<(Sdk, Instance)> {
         );
     }
     Ok((sdk, inst))
+}
+
+/// Re-read an instance (the caller holds its lock), check it against the process table and
+/// require it to be READY. For operations that need a live, booted device.
+pub(crate) fn ready_instance_locked(store: &Store, id: &str) -> Result<Instance> {
+    let mut inst = store.find(id)?;
+    runtime::reconcile(store, &mut inst)?;
+    if inst.state != State::Ready {
+        bail!(
+            "instance {} is {}, not READY\n\nStart it with `dorker run` or `dorker start`, wait for it to be ready, then commit.",
+            inst.name,
+            inst.state.as_str()
+        );
+    }
+    Ok(inst)
 }
 
 fn code_of(status: std::process::ExitStatus) -> i32 {
