@@ -66,15 +66,32 @@ impl Sdk {
         self.root.join("platform-tools").join("adb")
     }
 
-    /// The SDK's `sdkmanager`, from `cmdline-tools/<version>/bin` (newest first).
-    pub fn sdkmanager(&self) -> Option<PathBuf> {
+    /// A tool from `cmdline-tools/<version>/bin` (the `latest` directory first).
+    fn cmdline_tool(&self, name: &str) -> Option<PathBuf> {
         let base = self.root.join("cmdline-tools");
         let mut dirs = read_dirs(&base);
-        // `latest` first, then the rest in reverse (newest) order.
         dirs.sort_by_key(|d| std::cmp::Reverse(file_name(d) == "latest"));
         dirs.into_iter()
-            .map(|d| d.join("bin").join("sdkmanager"))
+            .map(|d| d.join("bin").join(name))
             .find(|p| p.is_file())
+    }
+
+    /// The legacy `sdkmanager`. Newer command-line tools keep it only as a deprecated shim.
+    pub fn sdkmanager(&self) -> Option<PathBuf> {
+        self.cmdline_tool("sdkmanager")
+    }
+
+    /// The `android` CLI (`android sdk install ...`), which replaces `sdkmanager`.
+    pub fn android_cli(&self) -> Option<PathBuf> {
+        self.cmdline_tool("android")
+    }
+
+    /// The best available tool for installing SDK packages: `android` when present, else
+    /// the legacy `sdkmanager` (older command-line tools), else none.
+    pub fn package_installer(&self) -> Option<Installer> {
+        self.android_cli()
+            .map(Installer::AndroidCli)
+            .or_else(|| self.sdkmanager().map(Installer::SdkManager))
     }
 
     /// Emulator version string, e.g. `37.2.12.0`.
@@ -165,7 +182,7 @@ impl Sdk {
         let shown = version_label(image.api, image.minor);
         let have: Vec<String> = installed.iter().map(|i| i.package.clone()).collect();
         bail!(
-            "no installed Android API {shown} system image for {abi}\n\nRun:\n  dorker pull android:{shown}\n(or: sdkmanager \"{wanted}\")\n\n\
+            "no installed Android API {shown} system image for {abi}\n\nRun:\n  dorker pull android:{shown}\n(or: android sdk install \"{wanted}\")\n\n\
              Installed images: {}",
             if have.is_empty() {
                 "none".into()
@@ -176,7 +193,45 @@ impl Sdk {
     }
 }
 
-/// The `sdkmanager` package id for an image reference on this host.
+/// A tool that can install SDK packages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Installer {
+    AndroidCli(PathBuf),
+    SdkManager(PathBuf),
+}
+
+impl Installer {
+    pub fn path(&self) -> &Path {
+        match self {
+            Installer::AndroidCli(p) | Installer::SdkManager(p) => p,
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Installer::AndroidCli(_) => "android sdk install",
+            Installer::SdkManager(_) => "sdkmanager",
+        }
+    }
+
+    /// The command that installs `package` into the SDK at `root`.
+    pub fn command(&self, root: &Path, package: &str) -> std::process::Command {
+        let mut c = std::process::Command::new(self.path());
+        match self {
+            Installer::AndroidCli(_) => {
+                c.arg(format!("--sdk={}", root.display()))
+                    .args(["sdk", "install", package]);
+            }
+            Installer::SdkManager(_) => {
+                c.arg(format!("--sdk_root={}", root.display()))
+                    .args(["--install", package]);
+            }
+        }
+        c
+    }
+}
+
+/// The SDK package id for an image reference on this host.
 pub fn package_for(image: &ImageRef) -> String {
     format!(
         "system-images;android-{};{};{}",
@@ -340,7 +395,55 @@ mod tests {
         let err = sdk
             .resolve(&ImageRef::parse("android:34").unwrap())
             .unwrap_err();
-        assert!(err.to_string().contains("sdkmanager"));
+        assert!(err.to_string().contains("dorker pull android:34"));
+        assert!(err.to_string().contains("android sdk install"));
+    }
+
+    #[test]
+    fn installer_prefers_the_android_cli_over_the_deprecated_sdkmanager() {
+        let d = crate::testutil::Dir::new();
+        let sdk = Sdk {
+            root: d.path().to_path_buf(),
+        };
+        assert_eq!(sdk.package_installer(), None);
+        let bin = d.path().join("cmdline-tools/latest/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("sdkmanager"), b"#!/bin/sh\n").unwrap();
+        let only_legacy = sdk.package_installer().unwrap();
+        assert!(matches!(only_legacy, Installer::SdkManager(_)));
+        assert_eq!(only_legacy.name(), "sdkmanager");
+        std::fs::write(bin.join("android"), b"#!/bin/sh\n").unwrap();
+        let both = sdk.package_installer().unwrap();
+        assert!(
+            matches!(both, Installer::AndroidCli(_)),
+            "the new CLI wins when both exist"
+        );
+        let args = |i: &Installer| -> Vec<String> {
+            i.command(
+                Path::new("/sdk"),
+                "system-images;android-35;google_apis;x86_64",
+            )
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+        };
+        assert_eq!(
+            args(&both),
+            [
+                "--sdk=/sdk",
+                "sdk",
+                "install",
+                "system-images;android-35;google_apis;x86_64"
+            ]
+        );
+        assert_eq!(
+            args(&only_legacy),
+            [
+                "--sdk_root=/sdk",
+                "--install",
+                "system-images;android-35;google_apis;x86_64"
+            ]
+        );
     }
 
     #[test]

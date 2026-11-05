@@ -126,7 +126,7 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
                     .find_package(&m.system_image)
                     .ok_or_else(|| {
                         anyhow::anyhow!(
-                            "image {} needs {} which is not installed\n\nRun:\n  sdkmanager \"{}\"",
+                            "image {} needs {} which is not installed\n\nRun:\n  android sdk install \"{}\"",
                             m.id,
                             m.system_image,
                             m.system_image
@@ -559,8 +559,6 @@ pub fn rmi(key: &str) -> Result<i32> {
     Ok(0)
 }
 
-/// Install a system image with the SDK's own `sdkmanager` (it handles licences and
-/// downloads, and prompts on the terminal when a licence needs accepting).
 /// The base image a Dorkerfile asks for (`FROM`), so `dorker pull` can install it.
 fn image_from_dorkerfile(file: Option<&Path>) -> Result<String> {
     let cfg = errors::with(errors::CONFIG);
@@ -579,6 +577,9 @@ fn image_from_dorkerfile(file: Option<&Path>) -> Result<String> {
     Ok(df.from.to_string())
 }
 
+/// Install a system image with the SDK's own package tool: `android sdk install`, or the legacy
+/// `sdkmanager` on older command-line tools. The new CLI accepts the SDK licence without
+/// asking (verified), so `pull` prints a notice first; the legacy tool prompts by itself.
 pub fn pull(image: Option<&str>, file: Option<&Path>) -> Result<i32> {
     let dep = errors::with(errors::DEPENDENCY);
     let image = match image {
@@ -596,27 +597,47 @@ pub fn pull(image: Option<&str>, file: Option<&Path>) -> Result<i32> {
         println!("{package} is already installed");
         return Ok(0);
     }
-    let Some(manager) = sdk.sdkmanager() else {
+    let Some(installer) = sdk.package_installer() else {
         return Err(dep(anyhow::anyhow!(
-            "sdkmanager not found under {}/cmdline-tools\n\nInstall the command-line tools:\n  brew install --cask android-commandlinetools",
+            "no SDK package tool found under {}/cmdline-tools (looked for `android` and `sdkmanager`)\n\nInstall the Android command-line tools:\n  brew install --cask android-commandlinetools",
             sdk.root.display()
         )));
     };
-    eprintln!("Installing {package} with {}", manager.display());
-    let status = std::process::Command::new(&manager)
-        .arg(format!("--sdk_root={}", sdk.root.display()))
-        .arg("--install")
-        .arg(&package)
+    // Verified: Google's `android` CLI accepts the SDK licence by itself (it writes
+    // licenses/android-sdk-license without asking, even with no terminal), so say so
+    // before it happens instead of doing it silently on the user's behalf.
+    if matches!(installer, crate::sdk::Installer::AndroidCli(_))
+        && !sdk
+            .root
+            .join("licenses")
+            .join("android-sdk-license")
+            .is_file()
+    {
+        eprintln!(
+            "note: Google's `android` CLI accepts the Android SDK licences on your behalf when it installs packages\n      (for arm64 images that includes the ARM binary-translation licence).\n      Read them first: https://developer.android.com/studio/terms (Ctrl-C now to stop)."
+        );
+    }
+    eprintln!(
+        "Installing {package} with {} ({})",
+        installer.name(),
+        installer.path().display()
+    );
+    let status = installer
+        .command(&sdk.root, &package)
         .status()
-        .context("running sdkmanager")?;
+        .with_context(|| format!("running {}", installer.path().display()))?;
     if !status.success() {
         return Err(dep(anyhow::anyhow!(
-            "sdkmanager failed ({status}). Is the package name valid for this host? Try `sdkmanager --list | grep system-images`"
+            "{} failed ({status}). Is the package name valid for this host? List what exists with `android sdk list --all`",
+            installer.name()
         )));
     }
+    // The SDK tools exit 0 even for a package that does not exist ("Package ... not found."),
+    // so success is only trusted once the image is really on disk.
     if !sdk.system_images().iter().any(|i| i.package == package) {
         return Err(dep(anyhow::anyhow!(
-            "sdkmanager finished but {package} is not installed"
+            "{package} is not installed after {} finished; it probably does not exist for this host.\nList what is available with: android sdk list --all",
+            installer.name()
         )));
     }
     println!("{package} installed");

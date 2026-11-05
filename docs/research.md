@@ -108,8 +108,8 @@ Ubuntu 24.04 Azure VM with nested KVM, emulator 37.2.12.0, the SDK's own `qemu-s
 - Everything works unmodified: `doctor`, `run`, `exec`, `screenshot`, `stop`, `build` with snapshots,
   snapshot restore into a copy with the same AVD name, concurrent instances, `test`, `start`, `pull`.
   The full emulator end-to-end suite passes (312 s).
-- `dorker pull android:35` really downloaded and installed `x86_64-35_r09` in 46 s. `sdkmanager`
-  printed a deprecation notice in favour of the Android CLI; it still works.
+- `dorker pull android:35` really downloaded and installed `x86_64-35_r09` in 46 s (see the
+  Android CLI notes below).
 - ext4 has no reflinks, so `cp --reflink=auto` falls back to a full copy of the ~3-4 GB image per
   instance. That is correct but not free; on btrfs/xfs it would be a clone.
 - SDK directories with a minor version (`android-36.1`) exist next to `android-36`; they are distinct
@@ -128,6 +128,30 @@ With a running instance (emulator 37.2.12.0, macOS), `lsof` shows the emulator p
 on the console port (5554), the ADB port (5555) and its ephemeral service ports **only on
 `127.0.0.1` and `[::1]`**, with no UDP sockets and nothing bound to a non-loopback address.
 dorker passes no option that widens this. Not yet re-checked on Linux.
+
+## Android CLI and `sdkmanager` (checked 2026-11-05)
+
+Google's [Android CLI](https://developer.android.com/tools/agents/android-cli) (`android`, shipped in
+`cmdline-tools/latest/bin`) is the direction of travel, and dorker now prefers it.
+
+- **Verified on two machines:** `sdkmanager` is a small shell script that forwards to
+  `android sdk ...` and prints "sdkmanager is deprecated ... `android sdk` is the replacement". The
+  CLI's documentation pages do not themselves say `sdkmanager` is deprecated; the notice comes from
+  the tool.
+- **Syntax (documented):** `android [--sdk=<root>] sdk install <package>[@<version>]`. Slash package
+  paths are the new form; semicolon ids (`system-images;android-35;google_apis;arm64-v8a`) are
+  "supported for backward compatibility", and the CLI translated dorker's ids when tried.
+- **Exit status:** installing a package that does not exist prints `Package ... not found.` and
+  exits **0**, exactly like `sdkmanager`, so `dorker pull` trusts only what is on disk afterwards.
+- **Licence:** with stdin closed and no accepted licences, `android sdk install platform-tools`
+  installed without a prompt and **wrote `licenses/android-sdk-license` itself**; a real arm64 system-image pull also wrote `android-sdk-arm-dbt-license`. The docs do not
+  mention this. `dorker pull` therefore tells the user, with the terms URL, before it runs.
+- **Telemetry (documented by Google):** command names, option names and anonymised stack traces;
+  opt out with `--no-metrics`. dorker does not pass that flag, so the user's own setting applies.
+- **Scope:** the CLI also manages emulators/AVDs (`android emulator ...`), installs APKs, captures
+  screens and drives input. dorker does not use these: its private AVD homes, snapshot images and
+  process safety are its own. Whether `android emulator` could back a future dorker runtime backend
+  has not been evaluated.
 
 ## Licensing
 

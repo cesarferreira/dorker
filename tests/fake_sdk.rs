@@ -540,3 +540,192 @@ fn screenshot_waits_for_a_non_blank_frame_but_never_blocks_forever() {
         "returned once the frame filled in: {secs}s"
     );
 }
+
+// ---------- dorker pull against stub package tools ----------
+
+const ANDROID_CLI: &str = r#"#!/bin/sh
+# Stub of `android --sdk=ROOT sdk install PACKAGE`. Real tools exit 0 even for unknown packages.
+root=${1#--sdk=}
+[ "$2" = "sdk" ] && [ "$3" = "install" ] || { echo "unexpected args: $*" >&2; exit 2; }
+pkg=$4
+echo "$*" > "$FAKE_PIDDIR/android-args.txt"
+if [ -n "$FAKE_PULL_NOOP" ]; then
+  echo "Package $(echo "$pkg" | tr ';' '/') not found."
+  exit 0
+fi
+dir="$root/$(echo "$pkg" | tr ';' '/')"
+mkdir -p "$dir" && echo x > "$dir/system.img"
+"#;
+
+const SDKMANAGER: &str = r#"#!/bin/sh
+# Stub of the legacy `sdkmanager --sdk_root=ROOT --install PACKAGE`.
+root=${1#--sdk_root=}
+[ "$2" = "--install" ] || { echo "unexpected args: $*" >&2; exit 2; }
+pkg=$3
+echo "$*" > "$FAKE_PIDDIR/sdkmanager-args.txt"
+dir="$root/$(echo "$pkg" | tr ';' '/')"
+mkdir -p "$dir" && echo x > "$dir/system.img"
+"#;
+
+fn host_abi() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "arm64-v8a"
+    } else {
+        "x86_64"
+    }
+}
+
+#[test]
+fn pull_installs_with_the_android_cli_and_verifies_the_result() {
+    let _guard = serial();
+    let f = Fake::new("pull-android", false);
+    write_exec(&f.sdk.join("cmdline-tools/latest/bin/android"), ANDROID_CLI);
+    write_exec(
+        &f.sdk.join("cmdline-tools/latest/bin/sdkmanager"),
+        SDKMANAGER,
+    );
+
+    let out = f.run(&["pull", "android:35"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("android sdk install"),
+        "names the tool it used: {}",
+        text(&out.stderr)
+    );
+    // Google's CLI accepts the SDK licence without asking, so dorker must say so first.
+    assert!(
+        text(&out.stderr).contains("accepts the Android SDK licences on your behalf"),
+        "{}",
+        text(&out.stderr)
+    );
+    // The new CLI was used, with the SDK root and the SDK package id; the deprecated tool was not.
+    let args = std::fs::read_to_string(f.piddir.join("android-args.txt")).unwrap();
+    assert!(
+        args.contains(&format!(
+            "sdk install system-images;android-35;google_apis;{}",
+            host_abi()
+        )),
+        "{args}"
+    );
+    assert!(
+        args.contains(&format!("--sdk={}", f.sdk.display())),
+        "{args}"
+    );
+    assert!(
+        !f.piddir.join("sdkmanager-args.txt").exists(),
+        "sdkmanager must not be used when `android` exists"
+    );
+
+    // The image is now visible, so a second pull needs no tool at all.
+    let again = f.run(&["pull", "android:35"]);
+    assert_eq!(code(&again), 0);
+    assert!(
+        text(&again.stdout).contains("already installed"),
+        "{}",
+        text(&again.stdout)
+    );
+}
+
+#[test]
+fn pull_does_not_trust_a_tool_that_exits_zero_without_installing() {
+    let _guard = serial();
+    let f = Fake::new("pull-noop", false);
+    write_exec(&f.sdk.join("cmdline-tools/latest/bin/android"), ANDROID_CLI);
+    let out = f
+        .cmd(&["pull", "android:99"])
+        .env("FAKE_PULL_NOOP", "1")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 3, "{}", text(&out.stderr));
+    let err = text(&out.stderr);
+    assert!(err.contains("is not installed after"), "{err}");
+    assert!(
+        err.contains("android sdk list --all"),
+        "points at the replacement tool: {err}"
+    );
+    assert!(
+        !err.contains("sdkmanager"),
+        "no advice to use the deprecated tool: {err}"
+    );
+}
+
+#[test]
+fn pull_falls_back_to_sdkmanager_on_older_command_line_tools() {
+    let _guard = serial();
+    let f = Fake::new("pull-legacy", false);
+    write_exec(
+        &f.sdk.join("cmdline-tools/latest/bin/sdkmanager"),
+        SDKMANAGER,
+    );
+    let out = f.run(&["pull", "android:35"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("sdkmanager"),
+        "{}",
+        text(&out.stderr)
+    );
+    let args = std::fs::read_to_string(f.piddir.join("sdkmanager-args.txt")).unwrap();
+    assert!(
+        args.contains("--install system-images;android-35;google_apis;"),
+        "{args}"
+    );
+}
+
+#[test]
+fn pull_without_any_package_tool_explains_how_to_get_one() {
+    let _guard = serial();
+    let f = Fake::new("pull-none", false);
+    let out = f.run(&["pull", "android:35"]);
+    assert_eq!(code(&out), 3, "{}", text(&out.stderr));
+    let err = text(&out.stderr);
+    assert!(err.contains("android-commandlinetools"), "{err}");
+    assert!(err.contains("`android` and `sdkmanager`"), "{err}");
+}
+
+#[test]
+fn missing_image_errors_recommend_dorker_pull_and_the_new_cli() {
+    let _guard = serial();
+    let bare = Fake::new("hint", false);
+    let out = bare.run(&["run", "-d", "android:35"]);
+    assert_eq!(code(&out), 3);
+    let err = text(&out.stderr);
+    assert!(err.contains("dorker pull android:35"), "{err}");
+    assert!(err.contains("android sdk install"), "{err}");
+    assert!(!err.contains("sdkmanager"), "{err}");
+}
+
+#[test]
+fn pull_stays_quiet_about_the_licence_once_it_has_been_accepted() {
+    let _guard = serial();
+    let f = Fake::new("pull-licensed", false);
+    write_exec(&f.sdk.join("cmdline-tools/latest/bin/android"), ANDROID_CLI);
+    std::fs::create_dir_all(f.sdk.join("licenses")).unwrap();
+    std::fs::write(
+        f.sdk.join("licenses/android-sdk-license"),
+        b"accepted-earlier",
+    )
+    .unwrap();
+    let out = f.run(&["pull", "android:35"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    assert!(
+        !text(&out.stderr).contains("on your behalf"),
+        "{}",
+        text(&out.stderr)
+    );
+}
+
+#[test]
+fn legacy_sdkmanager_is_not_given_the_licence_notice() {
+    let _guard = serial();
+    let f = Fake::new("pull-legacy-lic", false);
+    write_exec(
+        &f.sdk.join("cmdline-tools/latest/bin/sdkmanager"),
+        SDKMANAGER,
+    );
+    let out = f.run(&["pull", "android:35"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    assert!(
+        !text(&out.stderr).contains("on your behalf"),
+        "the legacy tool prompts for licences itself"
+    );
+}

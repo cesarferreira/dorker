@@ -85,7 +85,7 @@ fn collect() -> Vec<Check> {
                 "emulator",
                 Level::Fail,
                 format!("not found at {}", s.emulator().display()),
-                Some("sdkmanager --install emulator"),
+                Some("android sdk install emulator"),
             );
         }
         // adb
@@ -97,7 +97,7 @@ fn collect() -> Vec<Check> {
                 "adb",
                 Level::Fail,
                 format!("not found at {}", s.adb().display()),
-                Some("sdkmanager --install platform-tools"),
+                Some("android sdk install platform-tools"),
             );
         }
         // system images
@@ -109,7 +109,7 @@ fn collect() -> Vec<Check> {
                 Level::Fail,
                 format!("no {} images installed", host_abi()),
                 Some(&format!(
-                    "sdkmanager \"system-images;android-35;google_apis;{}\"",
+                    "dorker pull android:35   (or: android sdk install \"system-images;android-35;google_apis;{}\")",
                     host_abi()
                 )),
             );
