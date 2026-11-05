@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 /// Refuse to unpack more than this (zip bomb guard; real bundles with OBBs are a few GB).
 const MAX_UNPACKED_BYTES: u64 = 8 << 30;
+/// `manifest.json` is read into memory, so it gets a small fixed limit.
+const MAX_MANIFEST_BYTES: u64 = 1 << 20;
 
 /// True when `path` should be unpacked as an XAPK bundle rather than installed as one APK.
 pub fn is_bundle(path: &Path) -> bool {
@@ -163,8 +165,17 @@ pub fn stage(bundle: &Path) -> Result<Staged> {
     let manifest = match zip.by_name("manifest.json") {
         Ok(mut m) => {
             let mut text = String::new();
-            m.read_to_string(&mut text)
+            // A real manifest is a few KB; do not trust the declared size.
+            (&mut m)
+                .take(MAX_MANIFEST_BYTES + 1)
+                .read_to_string(&mut text)
                 .context("reading manifest.json")?;
+            if text.len() as u64 > MAX_MANIFEST_BYTES {
+                bail!(
+                    "manifest.json is larger than {} MB",
+                    MAX_MANIFEST_BYTES >> 20
+                );
+            }
             Some(
                 serde_json::from_str::<serde_json::Value>(&text)
                     .context("manifest.json is not valid JSON")?,
@@ -189,8 +200,10 @@ pub fn stage(bundle: &Path) -> Result<Staged> {
         let rel = entry
             .enclosed_name()
             .with_context(|| format!("unsafe path {name:?} in the bundle"))?;
-        total += entry.size();
-        if total > MAX_UNPACKED_BYTES {
+        // The size in the zip header is only a hint, so also count the bytes really written
+        // and stop one byte past the remaining budget.
+        let budget = MAX_UNPACKED_BYTES.saturating_sub(total);
+        if entry.size() > budget {
             bail!(
                 "the bundle unpacks to more than {} GB",
                 MAX_UNPACKED_BYTES >> 30
@@ -201,7 +214,15 @@ pub fn stage(bundle: &Path) -> Result<Staged> {
             std::fs::create_dir_all(parent)?;
         }
         let mut f = std::fs::File::create(&out)?;
-        std::io::copy(&mut entry, &mut f).with_context(|| format!("unpacking {name}"))?;
+        let written = std::io::copy(&mut (&mut entry).take(budget + 1), &mut f)
+            .with_context(|| format!("unpacking {name}"))?;
+        total += written;
+        if total > MAX_UNPACKED_BYTES {
+            bail!(
+                "the bundle unpacks to more than {} GB",
+                MAX_UNPACKED_BYTES >> 30
+            );
+        }
         Ok(out)
     };
     for a in &plan.apks {
@@ -425,6 +446,12 @@ mod tests {
         std::fs::write(&junk, b"not a zip").unwrap();
         let err = stage(&junk).err().unwrap().to_string();
         assert!(err.contains("not a valid .xapk"), "{err}");
+        // An oversized manifest is refused rather than read into memory.
+        let big = tmp.join("big.xapk");
+        let filler = vec![b' '; (MAX_MANIFEST_BYTES as usize) + 10];
+        write_zip(&big, &[("manifest.json", &filler), ("a.apk", b"x")]);
+        let err = stage(&big).err().unwrap().to_string();
+        assert!(err.contains("manifest.json is larger"), "{err}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
