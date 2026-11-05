@@ -320,20 +320,9 @@ pub fn run(a: RunArgs) -> Result<i32> {
     } = start(&a, false)?;
 
     if let Some(pkg) = image.as_ref().and_then(|m| m.launch.as_ref()) {
-        let launched = runtime::adb(&sdk, &inst.serial())
-            .args([
-                "shell",
-                "monkey",
-                "-p",
-                pkg,
-                "-c",
-                "android.intent.category.LAUNCHER",
-                "1",
-            ])
-            .output();
-        match launched {
-            Ok(o) if o.status.success() => eprintln!("Launched {pkg}"),
-            _ => eprintln!("warning: could not launch {pkg}; is it installed in the image?"),
+        match runtime::launch_app(&sdk, &inst.serial(), pkg) {
+            Ok(()) => eprintln!("Launched {pkg}"),
+            Err(e) => eprintln!("warning: {e:#}"),
         }
     }
 

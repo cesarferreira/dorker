@@ -399,6 +399,54 @@ pub fn wait_ready(
     }
 }
 
+/// Launch a package's launcher activity and wait until its first frame is drawn
+/// (`am start -W`), so a screenshot taken right afterwards shows the app and not
+/// the system splash screen.
+pub fn launch_app(sdk: &Sdk, serial: &str, pkg: &str) -> Result<()> {
+    let resolved = adb(sdk, serial)
+        .args([
+            "shell",
+            "cmd",
+            "package",
+            "resolve-activity",
+            "--brief",
+            "-a",
+            "android.intent.action.MAIN",
+            "-c",
+            "android.intent.category.LAUNCHER",
+            pkg,
+        ])
+        .output()?;
+    let component = String::from_utf8_lossy(&resolved.stdout)
+        .lines()
+        .map(str::trim)
+        .rfind(|l| l.contains('/') && l.starts_with(pkg))
+        .map(str::to_string);
+    let Some(component) = component else {
+        bail!("package {pkg} has no launcher activity (is it installed?)");
+    };
+    let out = adb(sdk, serial)
+        .args(["shell", "am", "start", "-W", "-n", &component])
+        .output()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    if !out.status.success() || text.contains("Error") || !text.contains("Status: ok") {
+        bail!("could not launch {component}: {}", text.trim());
+    }
+    // `am start -W` can return while the system splash screen still covers the
+    // app. The splash is its own window; wait (briefly) until it is gone.
+    // `pkg` comes from a validated `CMD launch` package name, so it is shell-safe.
+    let probe = format!("dumpsys window windows | grep -c 'Splash Screen {pkg}'");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let o = adb(sdk, serial).args(["shell", &probe]).output()?;
+        if String::from_utf8_lossy(&o.stdout).trim() == "0" {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    Ok(())
+}
+
 /// Reboot the guest and wait until it is usable again. Rebooting forces Android to
 /// flush delayed writes (package database, settings) to the virtual disk, so the
 /// state survives a cold boot and not only a snapshot restore.

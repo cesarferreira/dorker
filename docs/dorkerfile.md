@@ -37,7 +37,7 @@ CMD launch com.example.application
 | `INSTALL` | path | Repeatable. Relative to the build context; paths that escape it (`..`, symlinks) are rejected |
 | `SETTING` | `[global\|secure\|system] key value` | Repeatable. Namespace defaults to `global`. Only `[A-Za-z0-9_.:-]` is accepted |
 | `SNAPSHOT` | name | Save an emulator snapshot after provisioning. Instances restore it in a few seconds |
-| `CMD` | `launch <package>` | Launches the package's launcher activity after the instance is ready. Other forms are rejected |
+| `CMD` | `launch <package>` | Launches the package's launcher activity after the instance is ready and waits for its first frame (the system splash screen is gone), so an immediate `dorker screenshot` shows the app. Other forms are rejected |
 
 Arbitrary host commands are not supported, by design.
 
