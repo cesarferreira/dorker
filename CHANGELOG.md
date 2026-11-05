@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2026-11-05
+
+### 🚀 Features
+
+- Dorker pull uses the Android CLI instead of the deprecated sdkmanager
+- Colour the doctor report
+
+### 📚 Documentation
+
+- Fix the README code blocks that overflowed and were mis-coloured
+
+### 🧪 Testing
+
+- Make the doctor colour test independent of the runner's SDK
 ## [0.1.3] - 2026-11-05
 
 ### 🚀 Features
