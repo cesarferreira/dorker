@@ -199,6 +199,14 @@ fn signal_group(pid: u32, sig: &str) {
 /// Reconcile persisted state with reality: a process-expecting state with a dead
 /// process becomes CRASHED (or STOPPED if we were stopping).
 pub fn reconcile(store: &Store, inst: &mut Instance) -> Result<()> {
+    // A CLI killed between creating the record and spawning the emulator leaves a
+    // CREATED record with no process; it can never become usable, so fail it.
+    if inst.state == State::Created && crate::store::now_secs().saturating_sub(inst.created_at) > 60
+    {
+        inst.set_state(State::Failed)?;
+        store.save(inst)?;
+        return Ok(());
+    }
     if inst.state.expects_process() && !is_our_process(inst) {
         let next = if inst.state == State::Stopping {
             State::Stopped
@@ -210,6 +218,43 @@ pub fn reconcile(store: &Store, inst: &mut Instance) -> Result<()> {
         store.save(inst)?;
     }
     Ok(())
+}
+
+/// Emulator processes that look like dorker's (`-avd dorker -port N`) but belong to
+/// no instance record, e.g. after the CLI was killed mid-start. Returns (pid, port).
+pub fn orphans(store: &Store) -> Vec<(u32, u16)> {
+    let known: Vec<u32> = store
+        .load_all()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|i| i.pid)
+        .collect();
+    let Ok(out) = Command::new("ps")
+        .args(["-ax", "-o", "pid=,command="])
+        .output()
+    else {
+        return vec![];
+    };
+    parse_orphans(&String::from_utf8_lossy(&out.stdout), &known)
+}
+
+pub fn parse_orphans(ps_output: &str, known_pids: &[u32]) -> Vec<(u32, u16)> {
+    ps_output
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            let (pid, cmd) = l.split_once(char::is_whitespace)?;
+            let pid: u32 = pid.parse().ok()?;
+            let port = cmd
+                .split("-avd dorker -port ")
+                .nth(1)?
+                .split_whitespace()
+                .next()?
+                .parse()
+                .ok()?;
+            (!known_pids.contains(&pid)).then_some((pid, port))
+        })
+        .collect()
 }
 
 // ---------- adb ----------
@@ -544,6 +589,28 @@ mod tests {
         assert_eq!(a.state, State::Crashed);
         assert_eq!(store.find("t").unwrap().state, State::Crashed);
         assert!(a.pid.is_none());
+    }
+
+    #[test]
+    fn finds_orphans_only() {
+        let ps = "  101 /sdk/emulator/qemu/darwin-aarch64/qemu-system-aarch64-headless -avd dorker -port 5554 -no-audio\n\
+  202 /sdk/emulator/emulator -avd dorker -port 5556 -no-window\n\
+  303 /sdk/emulator/emulator -avd Pixel_9 -port 5558\n\
+  404 vim notes\n";
+        assert_eq!(parse_orphans(ps, &[101]), vec![(202, 5556)]);
+        assert_eq!(parse_orphans(ps, &[]).len(), 2);
+    }
+
+    #[test]
+    fn stale_created_record_becomes_failed() {
+        let d = Dir::new();
+        let store = Store::at(d.path().to_path_buf()).unwrap();
+        let mut a = inst();
+        a.created_at = 1; // long ago
+        store.save(&a).unwrap();
+        reconcile(&store, &mut a).unwrap();
+        assert_eq!(a.state, State::Failed);
+        assert_eq!(store.find("t").unwrap().state, State::Failed);
     }
 
     #[test]

@@ -89,6 +89,8 @@ dorker rm -f t1
 ```
 
 See [docs/dorkerfile.md](docs/dorkerfile.md) and [examples/basic](examples/basic).
+The example APKs are not committed: run `examples/basic/make-apk.sh` first (needs the
+Android build-tools and a JDK).
 
 Each instance gets its own private AVD under `~/.dorker` (override with
 `DORKER_HOME`). Your existing AVDs are never touched. `dorker run --rm` removes the
@@ -144,6 +146,8 @@ See [docs/architecture.md](docs/architecture.md) for design and limitations.
 - **Memory:** a 2GB guest used about 5.5GB of host RAM in our measurements.
 - **Builds take about 45s** because dorker reboots the guest to persist provisioned state.
 - **`CMD`** only supports `launch <package>`. There is no `dorker start` for stopped instances yet, no GPU-mode selection (software rendering is used when headless) and no automatic test-APK discovery.
+- **Concurrency:** creating instances concurrently is safe (a lock serialises name and port allocation), but there is no per-instance lock, so running `stop`, `rm -f` or a foreground `run` on the *same* instance at the same time is not serialised.
+- **Orphans:** emulator processes that dorker started but lost track of (CLI killed mid-start) are reported by `dorker ps`, not adopted or killed automatically.
 - The manifest-only sample APKs in `examples/` are for demonstration, not real apps.
 
 <a id="development"></a>

@@ -50,7 +50,7 @@ impl State {
                 | (Booting, Ready)
                 | (Starting | Booting | Ready, Stopping)
                 | (Stopping, Stopped)
-                | (Starting | Booting, Failed)
+                | (Created | Starting | Booting, Failed)
                 | (Starting | Booting | Ready | Stopping, Crashed)
                 // A stopped, failed or crashed instance can be started again.
                 | (Stopped | Failed | Crashed, Starting)

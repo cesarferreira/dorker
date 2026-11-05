@@ -55,7 +55,11 @@ itself. One crate, synchronous, no daemon.
 10. **Pid identity before signals.** A process is signalled only if its command
    line contains `-avd dorker -port <port>` for this instance; the signal goes to its
     process group.
-11. **Atomic metadata.** `instance.json` is written to a temp file and renamed.
+11. **Crash and orphan handling.** A process-expecting record whose process is gone
+    becomes `CRASHED`; a `CREATED` record older than 60 s becomes `FAILED`; emulator
+    processes with no record are reported by `dorker ps`. There is no per-instance
+    lock yet.
+12. **Atomic metadata.** `instance.json` is written to a temp file and renamed.
    A lock file serialises name and port allocation across concurrent runs.
 
 ## Lifecycle

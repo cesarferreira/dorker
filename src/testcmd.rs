@@ -188,7 +188,8 @@ pub fn run(key: &str, runner: &str, class: Option<&str>, timeout: u64) -> Result
         let _ = std::fs::write(logdir.join("logcat.txt"), o.stdout);
     }
 
-    let report = parse(&stdout);
+    // Some failures (e.g. "target has no code") arrive on stderr; parse both.
+    let report = parse(&format!("{stdout}{stderr}"));
     println!(
         "Tests: {} passed, {} failed, {} errors, {} ignored",
         report.passed, report.failed, report.errors, report.ignored
@@ -201,6 +202,22 @@ pub fn run(key: &str, runner: &str, class: Option<&str>, timeout: u64) -> Result
     }
     if let Some(m) = &report.failed_to_start {
         eprintln!("error: {m}");
+        // Android's own detail is not always delivered, so show what can be run.
+        let listed = runtime::adb(&sdk, &serial)
+            .args(["shell", "pm", "list", "instrumentation"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if listed.is_empty() {
+            eprintln!(
+                "No instrumentation is installed in this instance. Install a test APK with `dorker install`."
+            );
+        } else {
+            eprintln!("Instrumentation installed in this instance:");
+            for l in listed.lines() {
+                eprintln!("  {}", l.trim_start_matches("instrumentation:"));
+            }
+        }
     }
     if report.crashed {
         eprintln!("error: the instrumentation process crashed");

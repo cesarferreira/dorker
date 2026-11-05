@@ -436,6 +436,11 @@ pub fn ps(all: bool, json: bool) -> Result<i32> {
     if !all {
         list.retain(|i| i.state.expects_process());
     }
+    for (pid, port) in runtime::orphans(&store) {
+        eprintln!(
+            "warning: emulator pid {pid} (console port {port}) belongs to no dorker instance; stop it with `kill {pid}`"
+        );
+    }
     if json {
         let rows: Vec<_> = list
             .iter()
@@ -572,9 +577,9 @@ pub fn each(keys: &[String], f: impl Fn(&str) -> Result<i32>) -> Result<i32> {
 }
 
 pub fn stop(key: &str) -> Result<i32> {
-    let sdk = Sdk::locate()?;
     let store = Store::open()?;
     let mut inst = store.find(key)?;
+    let sdk = Sdk::locate().map_err(errors::with(errors::DEPENDENCY))?;
     stop_instance(&sdk, &store, &mut inst)?;
     println!("{}", inst.name);
     Ok(0)
