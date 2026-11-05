@@ -37,6 +37,33 @@ on 2026-11-05. Reproduce with the same command; add `--json` for machine-readabl
   Instances are APFS clones of it, so each starts cheap and grows as it writes.
 - Single machine, a few runs, no warm-cache control. Treat as indicative.
 
+## Baselines, overhead, disk and app launch
+
+`dorker bench android:35 --runs 3 --baseline` and `dorker bench counter:bench --runs 3`
+(the real Gradle app image, `examples/counter-app`) on the Mac, 2026-11-05. Medians in seconds.
+
+| Measurement | Result | Notes |
+|---|---|---|
+| Official emulator, cold, no snapshot (baseline 1) | 18.0 (17.8, 18.0, 18.3) | fresh AVD each run, bare `boot_completed` poll, no dorker orchestration |
+| dorker cold boot, base image (baseline 3) | 17.5 (17.4, 17.5, 18.8) | same emulator and flags; **no measurable dorker overhead** |
+| Official emulator with its own quickboot (baseline 2) | 2.8 (3.2, 2.2, 2.8) | `default_boot`, restored on the 2nd+ boot of the same AVD |
+| dorker prepared image, snapshot restore (baseline 4) | 3.9 (4.0, 3.9, 3.7) | 3.5 GB image with the app installed |
+| App launch to first frame (`am start -W` + splash gone) | 1.2 | counter app |
+| Screenshot | 0.2 | |
+| Stop + remove | 1.6 | |
+
+- **Where dorker's 3.7 s restore goes:** about 0.1-0.3 s of dorker work before the emulator is
+  spawned (checks and the clone, which is about 20 ms), then about 3.6 s until adb sees the
+  device, and the app is ready about 60 ms after that. So the roughly 1 s gap to the plain
+  emulator's quickboot (2.8 s) is the emulator's own snapshot load, not dorker's overhead.
+  Hypothesis, not verified: the baseline restores a snapshot it has just written (hot in the
+  page cache), while a fresh clone of the image has to be read from disk. Both meet the PRD's
+  under-5-second target for a prepared instance.
+- **Disk:** a new instance of the 3.5 GB image costs **+19 MB** of physical storage (measured as
+  the change in free space, which accounts for copy-on-write clones) against 3.5 GB logical.
+  That is APFS cloning; on filesystems without clones (ext4) it is a full copy. An unprovisioned
+  `android:35` instance occupies about 0.8 GB after boot.
+
 ## Idle CPU and memory
 
 Measured by `dorker bench` after the emulator process uses under 25 % of a core over a

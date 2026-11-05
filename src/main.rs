@@ -101,6 +101,13 @@ enum Command {
         /// Skip the (slow) idle CPU and memory measurement
         #[arg(long)]
         skip_idle: bool,
+        /// Package to launch and time (default: the image's `CMD launch` package)
+        #[arg(long)]
+        launch: Option<String>,
+        /// Also time the plain official emulator (cold, and with its own quickboot
+        /// snapshot) as a baseline. Base `android:<api>` images only.
+        #[arg(long)]
+        baseline: bool,
     },
     /// Launch an instance from an image (e.g. android:35)
     Run {
@@ -265,6 +272,8 @@ fn run(cli: Cli) -> Result<i32> {
             timeout,
             gpu,
             skip_idle,
+            launch,
+            baseline,
         } => bench::run(bench::BenchArgs {
             image,
             runs: runs.max(1),
@@ -273,6 +282,8 @@ fn run(cli: Cli) -> Result<i32> {
             timeout,
             gpu,
             skip_idle,
+            launch,
+            baseline,
         }),
         Command::Images { json } => commands::images(json),
         Command::Rmi { image } => commands::rmi(&image),

@@ -1,7 +1,11 @@
 //! `dorker bench`: measured startup, provisioning and resource numbers.
 
 use crate::commands::{RunArgs, Started, start, stop_instance};
-use crate::runtime;
+use crate::images;
+use crate::runtime::{self, BootMode};
+use crate::sdk::Sdk;
+use crate::store::{Instance, State, Store, new_id, now_secs};
+use crate::units::ImageRef;
 use anyhow::{Context, Result};
 use serde_json::json;
 use std::path::PathBuf;
@@ -16,6 +20,133 @@ pub struct BenchArgs {
     pub timeout: u64,
     pub gpu: Option<String>,
     pub skip_idle: bool,
+    pub launch: Option<String>,
+    pub baseline: bool,
+}
+
+const MIB: u64 = 1024 * 1024;
+
+/// Timings of the plain official emulator, without dorker's orchestration.
+pub struct Baselines {
+    /// Fresh AVD, `-no-snapshot`, polled with a bare `sys.boot_completed` check.
+    pub cold: Vec<f64>,
+    /// The emulator's own quickboot (`default_boot`), restored on the second and later boots.
+    pub quickboot: Vec<f64>,
+    pub quickboot_restored: bool,
+}
+
+fn transient_instance(store: &Store, sys: &crate::sdk::SystemImage) -> Result<Instance> {
+    let id = new_id();
+    let inst = Instance {
+        id: id.clone(),
+        name: format!("bench-baseline-{}", &id[..6]),
+        image: "baseline".into(),
+        api: sys.api,
+        flavour: sys.flavour.clone(),
+        abi: sys.abi.clone(),
+        memory_mb: 2048,
+        cpus: 2,
+        disk_mb: 4096,
+        headless: true,
+        auto_remove: false,
+        console_port: runtime::allocate_port(store, None)?,
+        pid: None,
+        state: State::Created,
+        created_at: now_secs(),
+        device: "pixel_7".into(),
+        width: 1080,
+        height: 2400,
+        gpu: crate::dorkerfile::default_gpu(true).to_string(),
+        image_id: None,
+        snapshot: None,
+    };
+    runtime::write_avd(store, &inst, sys)?;
+    Ok(inst)
+}
+
+/// Start the emulator and return seconds until `sys.boot_completed` is 1. Deliberately
+/// simpler than dorker's readiness check: this is the "plain emulator" measurement.
+fn raw_boot(
+    sdk: &Sdk,
+    store: &Store,
+    inst: &mut Instance,
+    mode: &BootMode,
+    timeout: u64,
+) -> Result<f64> {
+    let t0 = Instant::now();
+    inst.pid = Some(runtime::spawn_emulator(sdk, store, inst, mode)?);
+    let serial = inst.serial();
+    loop {
+        if runtime::process_state(inst) == runtime::ProcState::Dead {
+            anyhow::bail!("emulator exited during the baseline boot");
+        }
+        if runtime::adb_getprop(sdk, &serial, "sys.boot_completed").as_deref() == Some("1") {
+            return Ok(t0.elapsed().as_secs_f64());
+        }
+        if t0.elapsed() > Duration::from_secs(timeout) {
+            runtime::kill_instance(sdk, inst, Duration::from_secs(5));
+            anyhow::bail!("baseline boot timed out after {timeout}s");
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+pub fn baselines(a: &BenchArgs) -> Result<Baselines> {
+    let cfg = crate::errors::with(crate::errors::CONFIG);
+    if !a.image.starts_with("android:") {
+        return Err(cfg(anyhow::anyhow!(
+            "--baseline needs a base android:<api> image, not a built image"
+        )));
+    }
+    let sdk = Sdk::locate().map_err(crate::errors::with(crate::errors::DEPENDENCY))?;
+    let store = Store::open()?;
+    let sys = sdk
+        .resolve(&ImageRef::parse(&a.image).map_err(cfg)?)
+        .map_err(crate::errors::with(crate::errors::DEPENDENCY))?;
+    let mut out = Baselines {
+        cold: vec![],
+        quickboot: vec![],
+        quickboot_restored: false,
+    };
+
+    // 1. Official emulator, no snapshots, a fresh AVD every time (like a dorker cold run).
+    for i in 0..a.runs {
+        eprintln!(
+            "baseline: official emulator, cold boot {}/{}",
+            i + 1,
+            a.runs
+        );
+        let mut inst = transient_instance(&store, &sys)?;
+        let r = raw_boot(&sdk, &store, &mut inst, &BootMode::Cold, a.timeout);
+        runtime::kill_instance(&sdk, &inst, Duration::from_secs(30));
+        let _ = store.remove(&inst);
+        out.cold.push(r?);
+    }
+
+    // 2. Official emulator with its own quickboot: the first boot is cold and its exit
+    // saves `default_boot`; later boots restore it.
+    let mut inst = transient_instance(&store, &sys)?;
+    let result = (|| -> Result<()> {
+        for i in 0..=a.runs {
+            eprintln!(
+                "baseline: official emulator, quickboot boot {}/{}",
+                i + 1,
+                a.runs + 1
+            );
+            let secs = raw_boot(&sdk, &store, &mut inst, &BootMode::Quickboot, a.timeout)?;
+            if i > 0 {
+                out.quickboot.push(secs);
+                out.quickboot_restored |= runtime::restored_from_snapshot(&store, &inst);
+            }
+            // A graceful exit makes the emulator save the snapshot, which takes a few seconds.
+            runtime::kill_instance(&sdk, &inst, Duration::from_secs(60));
+        }
+        Ok(())
+    })();
+    runtime::kill_instance(&sdk, &inst, Duration::from_secs(30));
+    let _ = store.remove(&inst);
+    result?;
+    Ok(out)
 }
 
 fn sh(cmd: &str, args: &[&str]) -> Option<String> {
@@ -238,9 +369,12 @@ pub fn run(a: BenchArgs) -> Result<i32> {
         cleanup.push(tear_down(&mut s)?);
     }
 
-    // The last measured run stays up for install / screenshot / idle numbers.
-    let (mut install, mut shot) = (None, None);
+    // The last measured run stays up for install / launch / screenshot / idle numbers.
+    let (mut install, mut shot, mut launch_secs) = (None, None, None);
+    let mut disk: Option<serde_json::Value> = None;
+    let root = Store::open()?.root();
     for i in 0..a.runs {
+        let free_before = runtime::free_space_bytes(&root);
         let mut s = start(&base(format!("bench-run-{i}")), false)?;
         if s.restored {
             restore.push(s.ready_secs);
@@ -259,6 +393,32 @@ pub fn run(a: BenchArgs) -> Result<i32> {
                     install = Some(t.elapsed().as_secs_f64());
                 }
             }
+            let package = a
+                .launch
+                .clone()
+                .or_else(|| s.image.as_ref().and_then(|m| m.launch.clone()));
+            if let Some(pkg) = package {
+                let t = Instant::now();
+                match runtime::launch_app(&s.sdk, &s.inst.serial(), &pkg) {
+                    Ok(()) => launch_secs = Some(t.elapsed().as_secs_f64()),
+                    Err(e) => eprintln!("warning: could not time launching {pkg}: {e:#}"),
+                }
+            }
+            // Physical storage: the free-space delta is the real additional usage (it
+            // accounts for copy-on-write clones); the per-file sizes are logical.
+            let free_after = runtime::free_space_bytes(&root);
+            let (inst_logical, inst_alloc) = images::dir_usage(&s.store.instance_dir(&s.inst.id));
+            let image_usage = s
+                .image
+                .as_ref()
+                .map(|m| images::dir_usage(&images::image_dir(&s.store, &m.id)));
+            disk = Some(json!({
+                "instance_additional_mb": free_before.zip(free_after).map(|(b, af)| b.saturating_sub(af) / MIB),
+                "instance_logical_mb": inst_logical / MIB,
+                "instance_allocated_mb": inst_alloc / MIB,
+                "image_logical_mb": image_usage.map(|(l, _)| l / MIB),
+                "image_allocated_mb": image_usage.map(|(_, al)| al / MIB),
+            }));
             let t = Instant::now();
             let png = runtime::adb(&s.sdk, &s.inst.serial())
                 .args(["exec-out", "screencap", "-p"])
@@ -272,6 +432,12 @@ pub fn run(a: BenchArgs) -> Result<i32> {
         }
         cleanup.push(tear_down(&mut s)?);
     }
+
+    let baseline = if a.baseline {
+        Some(baselines(&a)?)
+    } else {
+        None
+    };
 
     let machine = json!({
         "os": os_label(),
@@ -289,6 +455,12 @@ pub fn run(a: BenchArgs) -> Result<i32> {
         "cold_boot_secs": { "samples": cold, "median": median(&cold).map(r2) },
         "snapshot_restore_secs": { "samples": restore, "median": median(&restore).map(r2), "available": !snapshot_unavailable && !restore.is_empty() },
         "apk_install_secs": install.map(r2),
+        "app_launch_secs": launch_secs.map(r2),
+        "disk": disk,
+        "baseline": baseline.as_ref().map(|b| json!({
+            "official_cold_boot_secs": { "samples": b.cold, "median": median(&b.cold).map(r2) },
+            "official_quickboot_restore_secs": { "samples": b.quickboot, "median": median(&b.quickboot).map(r2), "restored": b.quickboot_restored },
+        })),
         "screenshot_secs": shot.map(r2),
         "idle_cold_boot": idle_json(&idle_cold),
         "idle_after_restore": idle_json(&idle_restore),
@@ -324,6 +496,37 @@ pub fn run(a: BenchArgs) -> Result<i32> {
             println!("  snapshot restore   n/a (image has no usable snapshot)");
         }
         println!("  apk install        {}", f(install, "s"));
+        println!("  app launch         {}", f(launch_secs, "s"));
+        if let Some(d) = &disk {
+            println!(
+                "  disk               instance +{} MB physical ({} MB logical); image {} MB logical",
+                d["instance_additional_mb"]
+                    .as_u64()
+                    .map_or("n/a".into(), |v| v.to_string()),
+                d["instance_logical_mb"],
+                d["image_logical_mb"]
+                    .as_u64()
+                    .map_or("n/a".into(), |v| v.to_string())
+            );
+        }
+        if let Some(b) = &baseline {
+            println!("  --- baselines (plain official emulator, no dorker orchestration) ---");
+            println!(
+                "  official cold      {} (median)  samples {:?}",
+                f(median(&b.cold), "s"),
+                b.cold.iter().map(|x| r2(*x)).collect::<Vec<_>>()
+            );
+            println!(
+                "  official quickboot {} (median)  samples {:?}{}",
+                f(median(&b.quickboot), "s"),
+                b.quickboot.iter().map(|x| r2(*x)).collect::<Vec<_>>(),
+                if b.quickboot_restored {
+                    ""
+                } else {
+                    "  [snapshot was NOT restored]"
+                }
+            );
+        }
         println!("  screenshot         {}", f(shot, "s"));
         for (label, idle) in [
             ("idle, cold boot", &idle_cold),

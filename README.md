@@ -111,7 +111,8 @@ Details and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 dorker init                                   # starter Dorkerfile
 dorker test t1 --runner com.example.test/androidx.test.runner.AndroidJUnitRunner
 dorker test t1 --runner ... --class com.example.FooTest#bar
-dorker bench myapp:latest --runs 3 --json     # boot, restore, install, idle usage
+dorker bench myapp:latest --runs 3 --json     # boot, restore, launch, disk, idle usage
+dorker bench android:35 --baseline            # also time the plain official emulator
 ```
 
 `dorker test` prints a summary, preserves the raw instrumentation output and logcat

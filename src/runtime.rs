@@ -376,7 +376,7 @@ pub fn adb(sdk: &Sdk, serial: &str) -> Command {
     c
 }
 
-fn adb_getprop(sdk: &Sdk, serial: &str, prop: &str) -> Option<String> {
+pub fn adb_getprop(sdk: &Sdk, serial: &str, prop: &str) -> Option<String> {
     let out = adb(sdk, serial)
         .args(["shell", "getprop", prop])
         .output()
@@ -405,6 +405,9 @@ pub enum BootMode {
     Cold,
     /// Full boot; snapshots can be saved explicitly (used by `build`).
     ColdSaveable,
+    /// The emulator's own default quickboot: load `default_boot` if present and save it on
+    /// exit. Only used for `bench --baseline`, to measure the plain emulator without dorker.
+    Quickboot,
     /// Restore the named snapshot (falls back to a cold boot if it cannot load);
     /// never saves on exit so the instance copy stays reproducible.
     Restore(String),
@@ -430,6 +433,7 @@ pub fn spawn_emulator(sdk: &Sdk, store: &Store, inst: &Instance, mode: &BootMode
         BootMode::Restore(name) => {
             cmd.args(["-snapshot", name, "-no-snapshot-save"]);
         }
+        BootMode::Quickboot => {}
     }
     cmd.args(["-gpu", &inst.gpu]);
     if inst.headless {
