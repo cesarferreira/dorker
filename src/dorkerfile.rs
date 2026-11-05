@@ -484,6 +484,32 @@ mod tests {
         assert_eq!(d.cmd, Some(Cmd::Launch("com.example.application".into())));
     }
 
+    /// Every ```dockerfile block in the README and docs must parse, so the examples we show
+    /// users can never drift out of sync with the parser.
+    #[test]
+    fn documented_dorkerfile_examples_parse() {
+        let mut checked = 0;
+        for (name, text) in [
+            ("README.md", include_str!("../README.md")),
+            ("docs/dorkerfile.md", include_str!("../docs/dorkerfile.md")),
+        ] {
+            let mut rest = text;
+            while let Some(start) = rest.find("```dockerfile\n") {
+                let body = &rest[start + "```dockerfile\n".len()..];
+                let end = body.find("```").expect("unterminated code block");
+                let block = &body[..end];
+                parse(name, block)
+                    .unwrap_or_else(|e| panic!("{name} example does not parse:\n{block}\n{e}"));
+                checked += 1;
+                rest = &body[end..];
+            }
+        }
+        assert!(
+            checked >= 2,
+            "expected examples in the README and dorkerfile.md, found {checked}"
+        );
+    }
+
     #[test]
     fn gpu_directive() {
         let d = p("FROM android:35\nGPU host\n").unwrap();

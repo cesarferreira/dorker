@@ -50,7 +50,21 @@ case "$1" in
     esac ;;
   emu)
     if [ "$2" = "kill" ] && [ -f "$FAKE_PIDDIR/$port.pid" ]; then kill "$(cat "$FAKE_PIDDIR/$port.pid")" 2>/dev/null; fi ;;
-  exec-out) printf '\211PNG\r\n\032\nfake-image-data' ;;
+  exec-out)
+    if [ "$3" = "-p" ]; then
+      printf '\211PNG\r\n\032\nfake-image-data'
+    else
+      # Raw frame: width 2, height 2, format 1, then four RGBA pixels.
+      printf '\002\000\000\000\002\000\000\000\001\000\000\000'
+      blank=
+      [ -n "$FAKE_BLANK" ] && blank=1
+      [ -n "$FAKE_BLANK_FILE" ] && [ -f "$FAKE_BLANK_FILE" ] && blank=1
+      if [ -n "$blank" ]; then
+        printf '\000\000\000\377\000\000\000\377\000\000\000\377\000\000\000\377'
+      else
+        printf '\377\000\000\377\000\377\000\377\000\000\377\377\377\377\377\377'
+      fi
+    fi ;;
   install) echo "Success" ;;
   logcat) echo "fake logcat line" ;;
   version) echo "Android Debug Bridge version 1.0.41" ;;
@@ -114,7 +128,9 @@ impl Fake {
             .env("FAKE_PIDDIR", &self.piddir)
             .env("DORKER_MIN_FREE_MB", "1")
             .env_remove("FAKE_EMU_CRASH")
-            .env_remove("FAKE_NOT_BOOTING");
+            .env_remove("FAKE_NOT_BOOTING")
+            .env_remove("FAKE_BLANK")
+            .env_remove("FAKE_BLANK_FILE");
         c
     }
 
@@ -443,5 +459,84 @@ fn crashed_emulator_is_detected_and_a_missing_image_points_to_pull() {
         text(&out.stderr).contains("dorker pull android:35"),
         "{}",
         text(&out.stderr)
+    );
+}
+
+#[test]
+fn screenshot_waits_for_a_non_blank_frame_but_never_blocks_forever() {
+    let _guard = serial();
+    let f = Fake::new("blank", true);
+    assert_eq!(code(&f.run(&["run", "-d", "--name", "s", "android:35"])), 0);
+    let started = std::time::Instant::now();
+    let ok = f.run(&["screenshot", "s", "-"]);
+    assert!(ok.stdout.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert!(
+        !text(&ok.stderr).contains("still blank"),
+        "a real frame is captured at once: {}",
+        text(&ok.stderr)
+    );
+    assert!(
+        started.elapsed().as_secs() < 5,
+        "no waiting when the screen already has content"
+    );
+
+    // A screen that stays blank: waits the full --wait, warns, and still returns the image.
+    let started = std::time::Instant::now();
+    let out = f
+        .cmd(&["screenshot", "s", "-", "--wait", "2"])
+        .env("FAKE_BLANK", "1")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    assert!(
+        out.stdout.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "the image is still returned"
+    );
+    assert!(
+        text(&out.stderr).contains("still blank after 2s"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert!(
+        started.elapsed().as_secs_f64() >= 2.0,
+        "waited for the deadline"
+    );
+
+    // --wait 0 disables the check entirely.
+    let started = std::time::Instant::now();
+    let out = f
+        .cmd(&["screenshot", "s", "-", "--wait", "0"])
+        .env("FAKE_BLANK", "1")
+        .output()
+        .unwrap();
+    assert!(out.stdout.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert!(!text(&out.stderr).contains("still blank"));
+    assert!(started.elapsed().as_secs_f64() < 2.0);
+
+    // A screen that fills in after a moment: returns as soon as it does, with no warning.
+    let flag = f.root.join("blank.flag");
+    std::fs::write(&flag, b"").unwrap();
+    let flag2 = flag.clone();
+    let t = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let _ = std::fs::remove_file(flag2);
+    });
+    let started = std::time::Instant::now();
+    let out = f
+        .cmd(&["screenshot", "s", "-", "--wait", "8"])
+        .env("FAKE_BLANK_FILE", &flag)
+        .output()
+        .unwrap();
+    t.join().unwrap();
+    assert!(out.stdout.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert!(
+        !text(&out.stderr).contains("still blank"),
+        "{}",
+        text(&out.stderr)
+    );
+    let secs = started.elapsed().as_secs_f64();
+    assert!(
+        (1.0..6.0).contains(&secs),
+        "returned once the frame filled in: {secs}s"
     );
 }

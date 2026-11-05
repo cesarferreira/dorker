@@ -730,8 +730,61 @@ pub fn install(key: &str, apk: &Path, json: bool) -> Result<i32> {
     Ok(if status.success() { 0 } else { errors::ADB })
 }
 
-pub fn screenshot(key: &str, output: &Path, json: bool) -> Result<i32> {
+/// True when a raw `screencap` frame (header + RGBA pixels) is essentially one flat colour,
+/// which is what a screen that has not drawn anything yet looks like. A frame counts as blank
+/// when its most common colour covers at least 99.5% of the pixels; a real UI (even a mostly
+/// white one with a toolbar and text) stays well below that, and one with many distinct
+/// colours (wallpaper, photos) is rejected early.
+pub fn frame_is_blank(raw: &[u8]) -> bool {
+    if raw.len() < 12 {
+        return false;
+    }
+    let w = u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize;
+    let h = u32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]) as usize;
+    let pixel_bytes = w.saturating_mul(h).saturating_mul(4);
+    if w == 0 || h == 0 || raw.len() < pixel_bytes {
+        return false; // unexpected layout: never block on a heuristic
+    }
+    // The header size varies between Android versions; the pixels are the trailing bytes.
+    let pixels = &raw[raw.len() - pixel_bytes..];
+    let mut counts: std::collections::HashMap<[u8; 4], usize> = std::collections::HashMap::new();
+    for p in pixels.chunks_exact(4) {
+        *counts.entry([p[0], p[1], p[2], p[3]]).or_insert(0) += 1;
+        if counts.len() > 64 {
+            return false; // gradients, wallpapers, photos: clearly drawn
+        }
+    }
+    let total = pixels.len() / 4;
+    let dominant = counts.values().copied().max().unwrap_or(0);
+    dominant * 1000 >= total * 995
+}
+
+pub fn screenshot(key: &str, output: &Path, json: bool, wait_secs: u64) -> Result<i32> {
     let (sdk, inst) = ready_instance(key)?;
+    // After a cold boot, READY can arrive several seconds before the launcher draws, and an
+    // app can still be starting. Wait (bounded) for something other than a flat frame.
+    if wait_secs > 0 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(wait_secs);
+        loop {
+            let raw = runtime::adb(&sdk, &inst.serial())
+                .args(["exec-out", "screencap"])
+                .output();
+            let blank = raw
+                .as_ref()
+                .is_ok_and(|o| o.status.success() && frame_is_blank(&o.stdout));
+            if !blank {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                eprintln!(
+                    "warning: the screen is still blank after {wait_secs}s (the launcher or app may not have drawn yet, or it really is blank); capturing anyway. Use --wait 0 to skip this check."
+                );
+                break;
+            }
+            crate::log::vlog!("screen is blank; waiting for the first frame");
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
     let out = runtime::adb(&sdk, &inst.serial())
         .args(["exec-out", "screencap", "-p"])
         .output()
@@ -851,4 +904,71 @@ pub fn rm(key: &str, force: bool) -> Result<i32> {
     store.remove(&inst)?;
     println!("{}", inst.name);
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A raw screencap frame: 12-byte header (w, h, format) plus RGBA pixels.
+    fn frame(w: u32, h: u32, pixel: impl Fn(usize) -> [u8; 4]) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&w.to_le_bytes());
+        v.extend_from_slice(&h.to_le_bytes());
+        v.extend_from_slice(&1u32.to_le_bytes());
+        for i in 0..(w * h) as usize {
+            v.extend_from_slice(&pixel(i));
+        }
+        v
+    }
+
+    #[test]
+    fn flat_frames_are_blank_and_real_ui_is_not() {
+        assert!(
+            frame_is_blank(&frame(100, 200, |_| [0, 0, 0, 255])),
+            "all black"
+        );
+        assert!(
+            frame_is_blank(&frame(100, 200, |_| [250, 250, 250, 255])),
+            "all white"
+        );
+        // A mostly white page with a dark toolbar and some text (about 10% non-dominant).
+        assert!(!frame_is_blank(&frame(100, 200, |i| if i % 10 == 0 {
+            [10, 10, 10, 255]
+        } else {
+            [250, 250, 250, 255]
+        })));
+        // A launcher-like wallpaper gradient.
+        assert!(!frame_is_blank(&frame(100, 200, |i| [
+            (i % 251) as u8,
+            (i % 199) as u8,
+            80,
+            255
+        ])));
+        // 0.3% of pixels differ: still blank (e.g. just a clock). 2% differ: content.
+        assert!(frame_is_blank(&frame(100, 200, |i| if i < 60 {
+            [9, 9, 9, 255]
+        } else {
+            [0, 0, 0, 255]
+        })));
+        assert!(!frame_is_blank(&frame(100, 200, |i| if i < 400 {
+            [9, 9, 9, 255]
+        } else {
+            [0, 0, 0, 255]
+        })));
+    }
+
+    #[test]
+    fn unexpected_frames_never_block() {
+        assert!(!frame_is_blank(&[]));
+        assert!(!frame_is_blank(&[1, 2, 3]));
+        // Header claims more pixels than were sent: do not guess.
+        let mut short = frame(100, 200, |_| [0, 0, 0, 255]);
+        short.truncate(100);
+        assert!(!frame_is_blank(&short));
+        // A different header length (newer Android) is handled by taking the trailing pixels.
+        let mut v = frame(50, 50, |_| [7, 7, 7, 255]);
+        v.splice(12..12, [0u8; 4]);
+        assert!(frame_is_blank(&v));
+    }
 }

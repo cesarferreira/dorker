@@ -75,27 +75,66 @@ dorker run -d --name test android:35            # boots a headless emulator
 dorker ps
 dorker exec test "getprop ro.build.version.sdk"
 dorker install test ./app-debug.apk
-dorker screenshot test shot.png
+dorker screenshot test shot.png                 # waits up to 10s for a non-blank frame (--wait 0 to skip)
 dorker logs test                                # add -f to follow
 dorker stop test
 dorker start test                               # cold boots again, keeps its data
 dorker rm test
 ```
 
-### Build an image
+### Describe your environment in a Dorkerfile
 
-```bash
-dorker build -t myapp:latest .          # reads ./Dorkerfile, writes Dorkerfile.lock
-dorker images
-dorker run -d --name t1 myapp:latest    # restores the snapshot in a few seconds
-dorker rm -f t1
+A `Dorkerfile` (next to your app, like a Dockerfile) declares the Android environment: the
+base image, resources, the APK to install, settings, and a snapshot to start from.
+
+```dockerfile
+# Dorkerfile
+FROM android:35                 # Android 35 system image (must be installed: dorker pull android:35)
+
+MEMORY 2GB                      # guest RAM
+CPUS 2
+DISK 4GB
+DEVICE pixel_7
+RESOLUTION 1080x2400
+HEADLESS true                   # no emulator window
+
+INSTALL ./app/build/outputs/apk/debug/app-debug.apk   # path is relative to this file's folder
+
+SETTING window_animation_scale 0        # make UI tests faster and less flaky
+SETTING transition_animation_scale 0
+SETTING animator_duration_scale 0
+
+SNAPSHOT ready                  # save a snapshot, so instances start in a few seconds
+CMD launch com.example.app      # open this app once an instance is ready
 ```
 
-See [docs/dorkerfile.md](docs/dorkerfile.md) and [examples/basic](examples/basic).
-[examples/counter-app](examples/counter-app) is a real Gradle app with Espresso tests
-(`./dev.sh` runs Gradle, `dorker build`, `run`, a screenshot and the tests).
-The example APKs are not committed: run `examples/basic/make-apk.sh` first (needs the
-Android build-tools and a JDK).
+Then build the image once and run it as many times as you like:
+
+```bash
+dorker build -t myapp:latest .              # reads ./Dorkerfile, writes Dorkerfile.lock
+dorker run -d --name t1 myapp:latest        # starts from the snapshot in a few seconds
+dorker screenshot t1 shot.png               # the app is already open
+dorker test t1 --runner com.example.app.test/androidx.test.runner.AndroidJUnitRunner
+dorker rm -f t1                             # throw it away
+
+dorker run --rm myapp:latest                # or: foreground, removed when you press Ctrl-C
+```
+
+An identical rebuild is a cache hit (instant), and every `dorker run` gets its own isolated
+copy, so instances never share state. To try it without your own app, use the sample:
+
+```bash
+examples/basic/make-apk.sh                  # builds a tiny sample APK (needs Android build-tools + a JDK)
+dorker build -t basic examples/basic
+dorker run -d --name b1 basic && dorker exec b1 "pm list packages | grep dorker"
+dorker rm -f b1
+```
+
+Every directive is documented in [docs/dorkerfile.md](docs/dorkerfile.md). More examples:
+[examples/basic](examples/basic), [examples/instrumentation](examples/instrumentation) and
+[examples/counter-app](examples/counter-app), a real Gradle app with Espresso tests
+(`./dev.sh` runs Gradle, `dorker build`, `run`, a screenshot and the tests). The example APKs
+are not committed: build them with each example's `make-apk.sh` (or Gradle for the counter app).
 
 Each instance gets its own private AVD under `~/.dorker` (override with
 `DORKER_HOME`). Your existing AVDs are never touched. `dorker run --rm` removes the

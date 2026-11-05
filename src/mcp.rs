@@ -179,8 +179,11 @@ pub fn tools() -> Vec<Value> {
         tool(
             "dorker_screenshot",
             "Take a screenshot",
-            "Capture the instance's screen as a PNG image.",
-            schema(json!({"instance": instance}), &["instance"]),
+            "Capture the instance's screen as a PNG image. Waits briefly for a non-blank frame, so it is safe to call right after dorker_run on a cold boot.",
+            schema(
+                json!({"instance": instance, "wait_secs": {"type": "integer", "minimum": 0, "description": "Seconds to wait for a non-blank frame (default 10; 0 disables)"}}),
+                &["instance"],
+            ),
             true,
             false,
         ),
@@ -367,7 +370,14 @@ pub fn build_invocation(name: &str, args: &Value) -> Result<Invocation, String> 
         "dorker_screenshot" => {
             let i = req_str(args, "instance")?;
             no_flag("instance", &i)?;
-            (vec![s("screenshot"), i, s("-")], Kind::Screenshot)
+            let mut v = vec![s("screenshot"), i, s("-")];
+            if let Some(w) = args.get("wait_secs") {
+                let n = w
+                    .as_u64()
+                    .ok_or("`wait_secs` must be a non-negative integer")?;
+                v.extend([s("--wait"), n.to_string()]);
+            }
+            (v, Kind::Screenshot)
         }
         "dorker_logs" => {
             let i = req_str(args, "instance")?;
@@ -880,6 +890,20 @@ mod tests {
         let inv = build_invocation("dorker_screenshot", &json!({"instance": "t1"})).unwrap();
         // The PNG comes back on stdout (`-`); there is no path to predict or race on.
         assert_eq!(inv.argv, ["screenshot", "t1", "-"]);
+        let inv = build_invocation(
+            "dorker_screenshot",
+            &json!({"instance": "t1", "wait_secs": 0}),
+        )
+        .unwrap();
+        assert_eq!(inv.argv, ["screenshot", "t1", "-", "--wait", "0"]);
+        assert!(
+            build_invocation(
+                "dorker_screenshot",
+                &json!({"instance": "t1", "wait_secs": -1})
+            )
+            .is_err()
+        );
+        let inv = build_invocation("dorker_screenshot", &json!({"instance": "t1"})).unwrap();
         assert_eq!(inv.kind, Kind::Screenshot);
         assert!(
             !include_str!("mcp.rs").contains(concat!("temp", "_dir()")),

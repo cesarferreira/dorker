@@ -38,7 +38,7 @@ The Android SDK (emulator, platform-tools) and a system image must be installed;
 | `dorker_start` / `dorker_stop` / `dorker_rm` | Restart, stop, remove an instance | instance / `{stopped[]}` / `{removed[]}` |
 | `dorker_exec` | Run a shell command in the guest | `{exit_code, stdout, stderr}` |
 | `dorker_install` | Install an APK from a host path | `{ok, output}` |
-| `dorker_screenshot` | Capture the screen | a PNG **image** content block |
+| `dorker_screenshot` | Capture the screen; waits up to `wait_secs` (default 10) for a non-blank frame, so it is safe right after `dorker_run` | a PNG **image** content block |
 | `dorker_logs` | Last N logcat lines (default 200) | text |
 | `dorker_test` | Run an instrumentation runner | `{ok, passed, failed, errors, failures[], log_dir, ...}` |
 

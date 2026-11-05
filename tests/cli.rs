@@ -404,6 +404,15 @@ fn end_to_end_build_run_exec_screenshot_test_cleanup() {
         &e,
         &["run", "-d", "--name", "cold", "--memory", "3GB", "e2e:test"],
     );
+    // Regression: right after a cold boot READY can arrive before the launcher has drawn, and a
+    // screenshot taken at once used to be a blank frame (~15 KB). It now waits for content.
+    let first_shot = e.run(&["screenshot", "cold", "-"]);
+    assert_eq!(code(&first_shot), 0, "{}", text(&first_shot.stderr));
+    assert!(
+        first_shot.stdout.len() > 200_000,
+        "screenshot right after a cold boot must not be blank ({} bytes)",
+        first_shot.stdout.len()
+    );
     assert!(adb_ok(&e, &["exec", "cold", "pm list packages"]).contains("com.dorker.sample"));
 
     // A stopped instance can be restarted and keeps the data it wrote.

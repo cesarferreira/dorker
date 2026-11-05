@@ -181,6 +181,9 @@ enum Command {
         /// Print {path, bytes} as JSON on stdout
         #[arg(long)]
         json: bool,
+        /// Seconds to wait for a non-blank frame (e.g. just after a cold boot); 0 disables
+        #[arg(long, default_value_t = 10)]
+        wait: u64,
     },
     /// Show Android logcat for an instance
     Logs {
@@ -331,7 +334,8 @@ fn run(cli: Cli) -> Result<i32> {
             instance,
             output,
             json,
-        } => commands::screenshot(&instance, &output, json),
+            wait,
+        } => commands::screenshot(&instance, &output, json, wait),
         Command::Logs {
             instance,
             follow,
