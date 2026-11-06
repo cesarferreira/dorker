@@ -15,9 +15,24 @@
     &nbsp;·&nbsp;
     <a href="#quickstart">Quickstart</a>
     &nbsp;·&nbsp;
+    <a href="#start-from-a-template">Templates</a>
+    &nbsp;·&nbsp;
+    <a href="#configuration">Configuration</a>
+    &nbsp;·&nbsp;
+    <a href="#use-it-from-ai-agents">AI agents</a>
+    &nbsp;·&nbsp;
     <a href="#development">Development</a>
   </p>
 </div>
+
+---
+
+dorker runs the official Android Emulator without a window and gives you what Docker gives
+you for containers: describe an environment in a `Dorkerfile`, build it once into an
+immutable image (with a snapshot, so it starts in seconds), and start as many isolated,
+disposable instances of it as you need. Use it for UI tests, screenshots, CI, and for
+handing an agent a device (it ships an MCP server). It is not an emulator of its own and
+needs the Android SDK.
 
 ---
 
@@ -71,7 +86,7 @@ validated. No Docker needed.
 ```bash
 # Check your setup, see which Android versions you can use, install one
 dorker doctor
-dorker versions                      # installed and available to pull
+dorker versions                  # installed and available to pull
 dorker pull android:35
 
 # Boot a headless emulator and use it
@@ -79,8 +94,8 @@ dorker run -d --name test android:35
 dorker ps
 dorker exec test "getprop ro.build.version.sdk"
 dorker install test ./app-debug.apk
-dorker screenshot test shot.png      # waits up to 10s for a non-blank frame
-dorker logs test                     # add -f to follow
+dorker screenshot test shot.png  # waits up to 10s for a non-blank frame
+dorker logs test                 # add -f to follow
 
 # Stop it, bring it back (cold boot, keeps its data), then delete it
 dorker stop test
@@ -133,7 +148,7 @@ dorker rm -f t1
 
 # Or in the foreground; the instance is removed on Ctrl-C
 dorker run --rm
-dorker run --logs                    # also stream the device log (logcat)
+dorker run --logs  # also stream the device log (logcat)
 ```
 
 On a Mac the emulator renders on the GPU by default (`GPU host`), which keeps it smooth
@@ -146,9 +161,9 @@ the new environment. Use `-f path/to/Dorkerfile` for a file elsewhere. For more 
 the steps are separate commands, and an image can be named and reused:
 
 ```bash
-dorker pull                              # install the FROM image if missing
-dorker build -t myapp:latest .           # APK, settings, snapshot, lockfile
-dorker run -d --name t1 myapp:latest     # run it by name, any time
+dorker pull                           # install the FROM image if missing
+dorker build -t myapp:latest .        # APK, settings, snapshot, lockfile
+dorker run -d --name t1 myapp:latest  # run it by name, any time
 ```
 
 If the base image isn't installed, `dorker build` and `dorker run` offer to install
@@ -178,13 +193,85 @@ documented in [docs/dorkerfile.md](docs/dorkerfile.md). More examples:
 (`./dev.sh` runs Gradle, `dorker build`, `run`, a screenshot and the tests). The example APKs
 are not committed: build them with each example's `make-apk.sh` (or Gradle for the counter app).
 
-Each instance gets its own private AVD under `~/.dorker` (override with
-`DORKER_HOME`). Your existing AVDs are never touched. `dorker run --rm` removes the
-instance when it stops. `ps`, `images` and `doctor` accept `--json`.
+Each instance gets its own private AVD under `~/.dorker` (see Configuration to move it).
+Your existing AVDs are never touched. `dorker run --rm` removes the instance when it
+stops. Most commands accept `--json`.
 
 Measured on an Apple M4 Pro, API 35, 2GB: cold boot about 15s, snapshot restore
 about 4s. Host memory is about 2.5GB after a cold boot and 3.3GB after a restore.
 Details and caveats: [docs/benchmarks.md](docs/benchmarks.md).
+
+### Start from a template
+
+```bash
+dorker templates                             # list them
+dorker templates android-auto-with-dev-mode  # what one contains
+dorker init --template screenshots           # copy it into this folder
+dorker init --template playstore my-app      # ...or into another folder
+```
+
+A template is a Dorkerfile plus any helper scripts. Shipped ones:
+
+| Template | What it gives you |
+|---|---|
+| `basic` | A plain Dorkerfile (the default for `dorker init`) |
+| `playstore` | A Google Play image (Play Store app, Google-signed system apps) |
+| `instrumentation-tests` | Build a Gradle app and run its instrumentation tests |
+| `screenshots` | Install an APK, launch it, save screenshots |
+| `android-auto` | Android Auto installed from an `.xapk` |
+| `android-auto-with-dev-mode` | The same, with developer mode on and the head unit server running |
+
+`init` never overwrites existing files unless you pass `--force`. New templates are
+welcome as pull requests: see [docs/templates.md](docs/templates.md).
+
+**Example: Android Auto with its head unit server running**
+
+```bash
+cargo install apkeep       # once: downloads the app
+dorker init --template android-auto-with-dev-mode
+dorker run -d --name auto  # asks once, then does it all
+```
+
+`dorker run` downloads the Android Auto `.xapk` (the `FETCH` line), installs it with its
+split APKs, turns on developer mode and starts the head unit server (the `PROVISION`
+line), and saves a snapshot. The first run takes about 1.5 minutes:
+
+```text
+Fetching missing files (./com.google.android.projection.gearhead.xapk) ...
+[2/6] Installing ./com.google.android.projection.gearhead.xapk
+[4/6] Persisting provisioned state: flush, reboot, verify (about 40s)
+[5/6] Running ./enable-dev-mode.sh
+• head unit server is listening (port 5277)
+[6/6] Saving snapshot "ready"
+Ready in 3.9s (snapshot restore)
+```
+
+Every later `dorker run` is a cache hit that starts in a few seconds, with the server
+already listening. The template uses a Google Play image, because the plain one carries an
+Android Auto stub that the real app cannot replace; see its README with
+`dorker templates android-auto-with-dev-mode`.
+
+### Run scripts while building
+
+Two directives run a script on your machine while an image is built. Both are cached with
+the image, and both ask before they run (see below).
+
+```dorkerfile
+INSTALL ./app.xapk
+FETCH ./fetch.sh      # creates app.xapk, but only when it is missing
+PROVISION ./setup.sh  # runs once, against the build emulator
+```
+
+- `FETCH` is for files `INSTALL` needs and you do not commit (a download, say). It runs only
+  when one of them is missing, never when it is there, so a cached build downloads nothing.
+  Delete the file, or run the script yourself, to refresh it.
+- `PROVISION` gets the build emulator's adb serial. Use it for setup that needs the device,
+  such as turning on a developer mode. An unchanged script is not run again.
+
+They are code on your machine, so `dorker build` / `dorker run` list them and ask first
+(read them). Without a terminal (scripts, CI) pass `--allow-provision` or set
+`DORKER_ALLOW_PROVISION=1`; the MCP server refuses them. Details in
+[docs/dorkerfile.md](docs/dorkerfile.md).
 
 ### Keep what you set up by hand
 
@@ -209,10 +296,10 @@ Settings that differ between machines (a Mac and a Linux box, say) go in
 `DORKER_CONFIG` names another file). Every setting is optional:
 
 ```toml
-home = "/mnt/big-disk/dorker"   # where images and instances are kept
-sdk = "~/Android/Sdk"           # the Android SDK
-gpu = "swiftshader_indirect"    # default GPU mode (a GPU line wins)
-min_free_mb = 8192              # least free disk needed to start work
+home = "/mnt/big-disk/dorker"  # where images and instances are kept
+sdk = "~/Android/Sdk"          # the Android SDK
+gpu = "swiftshader_indirect"   # default GPU mode (a GPU line wins)
+min_free_mb = 8192             # least free disk needed to start work
 ```
 
 An environment variable beats the file (`DORKER_HOME`, `ANDROID_HOME`,
@@ -223,47 +310,10 @@ filesystem: instances are copy-on-write clones of images. `gpu` is part of an im
 identity, so changing it rebuilds images. Things that carry a risk (`--pull`,
 `--allow-provision`) are not settable here: they stay a flag or an environment variable.
 
-### Start from a template
-
-```bash
-dorker templates                          # list them
-dorker templates android-auto-with-dev-mode   # what one contains
-dorker init --template screenshots        # copy it into this folder
-dorker init --template playstore my-app   # ...or into another folder
-```
-
-A template is a Dorkerfile plus any helper scripts. Shipped ones: `basic` (the default),
-`playstore`, `instrumentation-tests`, `screenshots`, `android-auto` (the app from an
-`.xapk`) and `android-auto-with-dev-mode` (also turns on developer mode and starts the head
-unit server). `init` never overwrites existing files unless you pass `--force`. New
-templates are welcome as pull requests: see [docs/templates.md](docs/templates.md).
-
-### Run a script while building
-
-`FETCH ./get-apk.sh` runs a script when an `INSTALL` file is missing (to download it, say),
-and is never run again once the file exists. `PROVISION ./setup.sh` in a Dorkerfile runs a
-host script once, against the build emulator
-(it gets the adb serial). Use it for setup that needs the device, such as turning on a
-developer mode. The result is cached with the image: an unchanged script is not run again.
-Because they are code on your machine, `dorker build` / `dorker run` ask before running one
-(read it first); in scripts pass `--allow-provision` or set `DORKER_ALLOW_PROVISION=1`.
-See [docs/dorkerfile.md](docs/dorkerfile.md) and the `android-auto-with-dev-mode` template.
-
-### Stop everything
-
-```bash
-dorker stop --all                   # every running instance
-dorker stop --orphans               # emulators dorker lost track of
-```
-
-`dorker ps` warns about an orphan. `--orphans` asks before stopping, because such an
-emulator may belong to another `DORKER_HOME` that is still using it (`--yes` skips the
-question).
-
 ### See what is using disk
 
 ```bash
-dorker ls                          # images, instances and storage (alias: df)
+dorker ls  # images, instances and storage (alias: df)
 dorker ls --json
 ```
 
@@ -279,10 +329,10 @@ Every Dorkerfile change makes a new image of about 3-5 GB. `dorker prune` remove
 you no longer need (`dorker ls` shows what that would be):
 
 ```bash
-dorker prune --dry-run             # show what would be removed
-dorker prune                       # remove it, after asking
-dorker prune --all --instances     # also tagged images and stopped instances
-dorker prune --older-than 7d -y    # only things idle for a week, no prompt
+dorker prune --dry-run           # show what would be removed
+dorker prune                     # remove it, after asking
+dorker prune --all --instances   # also tagged images and stopped instances
+dorker prune --older-than 7d -y  # only things idle for a week, no prompt
 ```
 
 By default it removes only images with no tag that no instance was made from; tagged
@@ -291,10 +341,20 @@ adds unused tagged images, `--instances` adds stopped ones). It lists what it wi
 first and, outside a terminal, refuses to delete without `--yes`. It also clears the
 leftovers of interrupted builds. A removed image is simply rebuilt the next time you need it.
 
+### Stop everything
+
+```bash
+dorker stop --all      # every running instance
+dorker stop --orphans  # emulators dorker lost track of
+```
+
+`dorker ps` warns about an orphan. `--orphans` asks before stopping, because such an
+emulator may belong to another `DORKER_HOME` that is still using it (`--yes` skips the
+question).
+
 ### Test, benchmark, automate
 
 ```bash
-dorker init                          # starter Dorkerfile (--template X)
 dorker test t1 \
   --runner com.example.test/androidx.test.runner.AndroidJUnitRunner
 dorker test t1 --runner ... --class com.example.FooTest#bar
@@ -306,21 +366,10 @@ dorker bench myapp:latest --runs 3 --json
 dorker bench android:35 --baseline
 ```
 
-`dorker test` prints a summary, preserves the raw instrumentation output and logcat
-under the instance directory, and exits 7 if anything failed.
+`dorker test` prints a summary and exits 7 if anything failed. It keeps the raw
+instrumentation output and logcat inside the instance, which `dorker rm` deletes, so add
+`--out test-results` to copy them somewhere that survives (for CI artifacts).
 See [examples/instrumentation](examples/instrumentation) for a runnable example.
-
-### Tests
-
-```bash
-# Needs cargo-nextest (cargo install cargo-nextest --locked)
-
-# Unit, CLI and fake-SDK lifecycle/failure tests (no emulator needed)
-cargo nextest run
-
-# End-to-end: boots real emulators, one at a time (about 3 minutes)
-cargo nextest run --profile e2e --run-ignored only
-```
 
 ### Use it from AI agents
 
@@ -337,9 +386,10 @@ operations are available to scripts as `--json` on `run`, `start`, `exec`, `inst
 
 ### Diagnostics
 
-`doctor`, `ls`, `ps`, `images`, `versions` and `prune` colour their output on a terminal
-(green ok, yellow warn, bold red FAIL, fixes and IDs in cyan, sizes in yellow). Colour is off when piped, `NO_COLOR` turns it off, `CLICOLOR_FORCE=1` forces it on,
-and `--json` is never coloured.
+`doctor`, `ls`, `ps`, `images`, `versions`, `prune`, `config` and `templates` colour their
+output on a terminal (green ok, yellow warn, bold red FAIL, fixes and IDs in cyan, sizes in
+yellow). Colour is off when piped, `NO_COLOR` turns it off, `CLICOLOR_FORCE=1` forces it
+on, and `--json` is never coloured.
 
 `dorker -v <command>` (or `DORKER_VERBOSE=1`) prints what dorker decides and runs to stderr: the
 located SDK, the boot mode and why, the exact emulator command line and environment, state
@@ -370,10 +420,10 @@ See [docs/architecture.md](docs/architecture.md) for design and limitations.
 - **System images are installed on request, not automatically.** `dorker pull android:35` runs Google's `android sdk install` (the replacement for the deprecated `sdkmanager`; older command-line tools fall back to `sdkmanager`). The new CLI accepts the Android SDK licences (and the ARM translation licence for arm64 images) for you without prompting, so `pull` says so first, and Google documents that it collects usage data (opt out with `android --no-metrics`); `dorker run`/`build` print this command when an image is missing. The download path itself was only verified for the already-installed and nonexistent-package cases, not a real multi-GB download.
 - **Snapshots are strict.** A change of emulator version, system-image revision, memory or CPUs invalidates an image's snapshot. dorker then cold boots (about 15s) and says so. Snapshots are host-specific and not portable between machines.
 - **Memory:** a 2GB guest used about 2.5GB of host memory after a cold boot and 3.3GB after a snapshot restore on macOS (3-3.7GB on Linux). Idle CPU is dominated by Android background work and takes about a minute to settle.
-- **Builds take about 45s** because dorker reboots the guest to persist provisioned state.
+- **Builds take about 45s** because dorker reboots the guest to persist provisioned state, plus the time of any `INSTALL`, `FETCH` and `PROVISION` steps.
 - **`CMD`** only supports `launch <package>`. `dorker start` always cold boots (about 14s) because restoring the image snapshot would roll back the instance's data. Rendering uses the Mac GPU (`host`) on macOS and software rendering (`swiftshader_indirect`) elsewhere; `GPU <mode>` in the Dorkerfile selects another. No mode was faster for snapshot restore in our measurements (see docs/benchmarks.md). There is no automatic test-APK discovery.
 - **Concurrency:** creating instances concurrently is safe, and `stop`, `rm` and `start` on the same instance are serialised by a per-instance lock (the second command waits up to 60s, then exits 8).
-- **Orphans:** emulator processes that dorker started but lost track of (CLI killed mid-start) are reported by `dorker ps`, not adopted or killed automatically.
+- **Orphans:** emulator processes that dorker started but lost track of (CLI killed mid-start) are reported by `dorker ps`; `dorker stop --orphans` stops them (after asking), but dorker never adopts them.
 - `examples/basic` and `examples/instrumentation` use tiny hand-built APKs; `examples/counter-app` is the realistic one.
 
 <a id="development"></a>
@@ -382,26 +432,34 @@ See [docs/architecture.md](docs/architecture.md) for design and limitations.
 Common tasks via the `Makefile`:
 
 ```bash
-make              # check + build + test
-make build        # debug build
+make           # check + build + test
+make build     # debug build
 make build-release
-make install      # install debug binary
+make install   # install debug binary
 make install-release
 make run ARGS="doctor"
-make check        # cargo check + clippy
-make fmt          # format
-make lint         # fmt check + clippy
-make test
+make check     # cargo check + clippy
+make fmt       # format
+make lint      # fmt check + clippy
+make test      # cargo nextest run
+make test-e2e  # real emulators, one at a time (about 3 minutes)
 make clean
-make demo         # install + show --help
+make demo      # install + show --help
+```
+
+Tests need [cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`):
+
+```bash
+cargo nextest run                                   # no emulator needed
+cargo nextest run --profile e2e --run-ignored only  # boots real emulators
 ```
 
 Releasing (requires [cargo-release](https://github.com/crate-ci/cargo-release) and [git-cliff](https://github.com/orhun/git-cliff)):
 
 ```bash
-make release                  # default minor bump
-make release LEVEL=patch      # patch bump
-make release LEVEL=major      # major bump
+make release              # default minor bump
+make release LEVEL=patch  # patch bump
+make release LEVEL=major  # major bump
 ```
 
 The pre-release hook regenerates `CHANGELOG.md` with `git-cliff` from your conventional-commit history (grouped into Features, Bug Fixes, etc. per `cliff.toml`) and commits it alongside the version bump. Pushing the resulting `v*` tag triggers the release workflow, which builds the multi-platform binaries and publishes a GitHub Release whose notes are generated by `git-cliff` from the same config.
