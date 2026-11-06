@@ -465,6 +465,7 @@ mod tests {
             gpu: "swiftshader_indirect".into(),
             image_id: None,
             snapshot: None,
+            owner: None,
         }
     }
 

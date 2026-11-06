@@ -3,10 +3,12 @@ use crate::errors;
 use crate::images::{self, ImageMeta};
 use crate::runtime::{self, BootMode};
 use crate::sdk::Sdk;
-use crate::store::{Instance, State, Store, new_id, now_secs};
+use crate::store::{Instance, RunOwner, State, Store, new_id, now_secs};
 use crate::units::{ImageRef, parse_size_mb};
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub struct RunArgs {
@@ -26,6 +28,20 @@ pub struct RunArgs {
     pub pull: bool,
     /// Stream the device's logcat while attached (`--logs`; foreground runs only).
     pub logs: bool,
+    /// The worker pool run that owns the new instance (recorded before the emulator spawns).
+    pub owner: Option<RunOwner>,
+    /// Abandons the start (like Ctrl-C) when set; a pool cancels its pending starts with it.
+    pub cancel: Option<Arc<AtomicBool>>,
+}
+
+impl RunArgs {
+    fn cancelled(&self) -> bool {
+        runtime::interrupted()
+            || self
+                .cancel
+                .as_ref()
+                .is_some_and(|c| c.load(Ordering::SeqCst))
+    }
 }
 
 /// An instance as machine-readable JSON, for `run --json`, `start --json` and the MCP server.
@@ -106,6 +122,11 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
     let store = Store::open()?;
     runtime::ensure_free_space(&store.root(), 0, "run an instance")?;
     let sdk = Sdk::locate().map_err(errors::with(errors::DEPENDENCY))?;
+    start_in(store, sdk, a, force_cold)
+}
+
+/// `start` with an explicit store and SDK (a worker pool passes its own).
+pub fn start_in(store: Store, sdk: Sdk, a: &RunArgs, force_cold: bool) -> Result<Started> {
     if !sdk.emulator().is_file() {
         return Err(errors::with(errors::DEPENDENCY)(anyhow::anyhow!(
             "emulator not found at {}\n\nRun `dorker doctor`.",
@@ -256,6 +277,9 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
     }
 
     runtime::install_interrupt_handler();
+    if a.cancelled() {
+        bail!("cancelled before the instance was created");
+    }
 
     // Name/port allocation and process spawn happen under one lock so that
     // concurrent `dorker run` invocations cannot collide.
@@ -301,6 +325,7 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
         gpu,
         image_id: image_meta.as_ref().map(|m| m.id.clone()),
         snapshot,
+        owner: a.owner.clone(),
     };
     store.save(&inst)?;
 
@@ -319,6 +344,9 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
                 }
             }
             None => runtime::write_avd(&store, &inst, &sys)?,
+        }
+        if a.cancelled() {
+            bail!("cancelled before the emulator started");
         }
         inst.set_state(State::Starting)?;
         inst.pid = Some(runtime::spawn_emulator(&sdk, &store, &inst, &boot)?);
@@ -347,12 +375,12 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
             store,
             inst,
             Duration::from_secs(a.timeout),
-            runtime::interrupted,
+            || a.cancelled(),
             || eprintln!("  Android is booting..."),
         )
     };
     let mut ready = wait(&store, &mut inst);
-    if ready.is_err() && matches!(boot, BootMode::Restore(_)) && !runtime::interrupted() {
+    if ready.is_err() && matches!(boot, BootMode::Restore(_)) && !a.cancelled() {
         // A corrupt or unloadable snapshot must not make the image unusable.
         eprintln!("warning: snapshot restore failed; falling back to a cold boot");
         let retry = (|| -> Result<()> {

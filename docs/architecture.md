@@ -23,6 +23,7 @@ itself. One crate, synchronous, no daemon.
 | `images.rs` | image metadata, tags, size accounting (clone-aware on APFS) |
 | `ls.rs`, `prune.rs` | `dorker ls` (images, instances, storage) and `dorker prune` |
 | `testcmd.rs` | `dorker test`: runs `am instrument -r`, parses the status protocol, keeps logs (`--out` copies them) |
+| `pool.rs` | worker pools: run ownership, resource admission, bounded parallel startup, cancellation and cleanup of a group of disposable instances |
 | `bench.rs` | `dorker bench` |
 | `errors.rs` | stable exit codes |
 | `mcp.rs` | `dorker mcp`: MCP server on stdio; each tool runs the CLI with `--json` |
@@ -91,6 +92,26 @@ itself. One crate, synchronous, no daemon.
 15. **Templates are data.** `templates/<name>/` folders are embedded at build time, so
     `cargo install` ships them and a contribution is a folder. A test validates every
     template (metadata, the Dorkerfile parses, scripts are executable).
+16. **Worker pools own what they start** (`pool.rs`). A pool resolves its image tag once to
+    an image id, writes `runs/<run-id>/manifest.json` (owner pid, worker count, per-worker
+    estimate), and starts every worker through `commands::start_in` with
+    `owner = {run_id, worker}`. The owner is saved in `instance.json` before the emulator
+    spawns, so partial starts are recoverable. Cleanup removes only instances with this run
+    as owner, under each instance's `op.lock`, after re-reading it and checking process
+    identity; it never uses `stop --all` or orphan matching. A run that died without
+    cleaning up (SIGKILL) is detected by the next pool (owner pid gone, or no longer a
+    dorker process) and its instances are removed then. Ctrl-C, SIGTERM and SIGHUP all set
+    the same interrupt flag, which the pool's supervisor turns into cancellation.
+17. **Admission is an estimate.** Before starting, a pool compares what its workers need
+    (host memory estimated as 1.5x guest RAM + 512 MB, the clone's disk, a port pair, vCPUs)
+    with the host's available memory and free disk minus a host reserve (2 GB,
+    `DORKER_HOST_RESERVE_MB`) and minus what other live pools have claimed but not yet used.
+    Running instances are not subtracted again (the host figures already include them). It
+    refuses with exit code 8 rather than silently starting fewer workers, rechecks before
+    each worker starts, and warns (but still admits) when a metric cannot be read. Claims are
+    read and written under `locks/pool.lock`. It cannot guarantee the host never runs out of
+    memory. Clones still happen under `create.lock`, so on filesystems without reflinks the
+    workers' copy phase is serial.
 
 ## Build pipeline
 
@@ -134,7 +155,9 @@ Transitions are validated by `State::can_become`.
 ├── instances/<id>/emulator.log
 ├── instances/<id>/test-*/        `dorker test` logs (die with the instance)
 ├── images/.<id>.partial/         a build or commit in progress (prune clears)
-└── locks/create.lock
+├── runs/<run-id>/manifest.json   a worker pool's owner and resource claim
+├── locks/create.lock
+└── locks/pool.lock
 ```
 
 The store root is `~/.dorker` unless `DORKER_HOME` or the config file's `home` says

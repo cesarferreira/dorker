@@ -368,6 +368,7 @@ mod tests {
             gpu: "swiftshader_indirect".into(),
             image_id: image_id.map(String::from),
             snapshot: None,
+            owner: None,
         }
     }
 

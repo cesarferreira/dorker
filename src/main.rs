@@ -10,6 +10,7 @@ mod images;
 mod log;
 mod ls;
 mod mcp;
+mod pool;
 mod prune;
 mod runtime;
 mod sdk;
@@ -430,6 +431,8 @@ fn run(cli: Cli) -> Result<i32> {
                 json,
                 pull,
                 logs,
+                owner: None,
+                cancel: None,
             })
         }
         Command::Build {

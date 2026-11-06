@@ -93,6 +93,17 @@ pub struct Instance {
     /// Snapshot to restore at start, if the image has one.
     #[serde(default)]
     pub snapshot: Option<String>,
+    /// The worker pool run that owns this instance, if any. Saved before the emulator is
+    /// spawned, so a pool can find and remove its partially started instances.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<RunOwner>,
+}
+
+/// Which pool run (and which worker in it) created an instance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunOwner {
+    pub run_id: String,
+    pub worker: u32,
 }
 
 fn default_gpu() -> String {
@@ -158,7 +169,9 @@ pub fn default_root() -> Result<PathBuf> {
 /// <root>/instances/<id>/instance.json   metadata (atomic writes)
 /// <root>/instances/<id>/avd/            private ANDROID_AVD_HOME for this instance
 /// <root>/instances/<id>/emulator.log
+/// <root>/runs/<run-id>/manifest.json    a worker pool's owner and resource claim
 /// <root>/locks/create.lock              serialises name/port allocation
+/// <root>/locks/pool.lock                serialises worker pool admission
 /// ```
 pub struct Store {
     root: PathBuf,
@@ -179,7 +192,7 @@ impl Store {
     }
 
     pub fn at(root: PathBuf) -> Result<Self> {
-        for sub in ["instances", "images", "locks"] {
+        for sub in ["instances", "images", "locks", "runs"] {
             fs::create_dir_all(root.join(sub))
                 .with_context(|| format!("creating {}", root.join(sub).display()))?;
         }
@@ -196,6 +209,10 @@ impl Store {
 
     pub fn images_dir(&self) -> PathBuf {
         self.root.join("images")
+    }
+
+    pub fn runs_dir(&self) -> PathBuf {
+        self.root.join("runs")
     }
 
     pub fn instance_dir(&self, id: &str) -> PathBuf {
@@ -293,7 +310,17 @@ impl Store {
 
     /// Take the store-wide creation lock (name + port allocation).
     pub fn lock_create(&self) -> Result<LockGuard> {
-        let path = self.root.join("locks").join("create.lock");
+        self.lock_named("create.lock")
+    }
+
+    /// Take the store-wide pool lock, held briefly while a worker pool reads and updates
+    /// resource claims, so two pools cannot both claim the same capacity.
+    pub fn lock_pool(&self) -> Result<LockGuard> {
+        self.lock_named("pool.lock")
+    }
+
+    fn lock_named(&self, file: &str) -> Result<LockGuard> {
+        let path = self.root.join("locks").join(file);
         for _ in 0..100 {
             match fs::OpenOptions::new()
                 .write(true)
@@ -316,7 +343,7 @@ impl Store {
     }
 }
 
-fn pid_alive(pid: u32) -> bool {
+pub(crate) fn pid_alive(pid: u32) -> bool {
     std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])
         .stderr(std::process::Stdio::null())
@@ -395,6 +422,7 @@ mod tests {
             gpu: "swiftshader_indirect".into(),
             image_id: None,
             snapshot: None,
+            owner: None,
         }
     }
 

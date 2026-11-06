@@ -60,6 +60,7 @@ fn transient_instance(store: &Store, sys: &crate::sdk::SystemImage) -> Result<In
         gpu: crate::dorkerfile::default_gpu(true),
         image_id: None,
         snapshot: None,
+        owner: None,
     };
     runtime::write_avd(store, &inst, sys)?;
     Ok(inst)
@@ -349,6 +350,8 @@ pub fn run(a: BenchArgs) -> Result<i32> {
         json: false,
         pull: a.pull,
         logs: false,
+        owner: None,
+        cancel: None,
     };
     let mut cold = Vec::new();
     let mut restore = Vec::new();

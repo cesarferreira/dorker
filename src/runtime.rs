@@ -230,6 +230,21 @@ pub fn allocate_port(store: &Store, requested: Option<u16>) -> Result<u16> {
         .context("no free emulator port pair available")
 }
 
+/// How many console/ADB port pairs `allocate_port` could still hand out right now.
+pub fn free_port_pairs(store: &Store) -> usize {
+    let taken: Vec<u16> = store
+        .load_all()
+        .unwrap_or_default()
+        .iter()
+        .filter(|i| i.state.expects_process())
+        .map(|i| i.console_port)
+        .collect();
+    (FIRST_PORT..=LAST_PORT)
+        .step_by(2)
+        .filter(|p| !taken.contains(p) && port_free(*p) && port_free(p + 1))
+        .count()
+}
+
 // ---------- processes ----------
 
 /// `ps` row for a pid: (process group id, full command line).
@@ -260,7 +275,7 @@ pub enum ProcState {
 
 /// Full command line of a process. On Linux `/proc/<pid>/cmdline` is exact; `ps`
 /// can truncate and has to be spawned, so it is only the fallback (macOS).
-fn cmdline_of(pid: u32) -> Option<String> {
+pub(crate) fn cmdline_of(pid: u32) -> Option<String> {
     if let Ok(bytes) = std::fs::read(format!("/proc/{pid}/cmdline")) {
         if !bytes.is_empty() {
             return Some(
@@ -776,6 +791,7 @@ mod tests {
             gpu: "swiftshader_indirect".into(),
             image_id: None,
             snapshot: None,
+            owner: None,
         }
     }
 
