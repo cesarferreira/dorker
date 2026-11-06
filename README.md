@@ -207,6 +207,8 @@ with the app state that was on screen.
 `PROVISION ./setup.sh` in a Dorkerfile runs a host script once, against the build emulator
 (it gets the adb serial). Use it for setup that needs the device, such as turning on a
 developer mode. The result is cached with the image: an unchanged script is not run again.
+Because it is code on your machine, `dorker build` / `dorker run` ask before running one
+(read it first); in scripts pass `--allow-provision` or set `DORKER_ALLOW_PROVISION=1`.
 See [docs/dorkerfile.md](docs/dorkerfile.md) and [examples/android-auto](examples/android-auto).
 
 ### Stop everything

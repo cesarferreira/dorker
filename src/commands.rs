@@ -407,6 +407,7 @@ pub fn run_target(
     file: Option<&Path>,
     timeout: u64,
     pull: bool,
+    allow_provision: bool,
 ) -> Result<String> {
     let cfg = errors::with(errors::CONFIG);
     if let Some(image) = image {
@@ -435,6 +436,7 @@ pub fn run_target(
         timeout,
         no_cache: false,
         pull,
+        allow_provision,
     })?;
     eprintln!("Running image {} built from {}", meta.id, path.display());
     Ok(meta.id)

@@ -1765,7 +1765,7 @@ fn provision_scripts_run_once_per_build_and_are_part_of_the_cache_key() {
     )
     .unwrap();
     let build = |args: &[&str]| {
-        let mut a = vec!["build"];
+        let mut a = vec!["build", "--allow-provision"];
         a.extend(args);
         a.push(ctx.to_str().unwrap());
         f.run(&a)
@@ -1777,9 +1777,31 @@ fn provision_scripts_run_once_per_build_and_are_part_of_the_cache_key() {
             .count()
     };
 
+    // Host scripts need consent: with no terminal and no flag the build is refused, and the
+    // script does not run (the MCP server is in this position).
+    let refused = f.run(&["build", ctx.to_str().unwrap()]);
+    assert_eq!(code(&refused), 2, "{}", text(&refused.stderr));
+    let why = text(&refused.stderr);
+    assert!(
+        why.contains("./setup.sh") && why.contains("--allow-provision"),
+        "{why}"
+    );
+    assert_eq!(runs(), 0, "a refused build must not run the script");
+    assert!(image_ids(&f).is_empty());
+    // The environment variable is an equivalent opt-in.
+    let mut via_env = f.cmd(&["build", ctx.to_str().unwrap()]);
+    via_env.env("DORKER_ALLOW_PROVISION", "1");
+    let allowed = via_env.output().unwrap();
+    assert_eq!(code(&allowed), 0, "{}", text(&allowed.stderr));
+    assert_eq!(runs(), 1);
+    // Cached from now on, which needs no consent because nothing runs.
+    let cached = f.run(&["build", ctx.to_str().unwrap()]);
+    assert_eq!(code(&cached), 0, "{}", text(&cached.stderr));
+    assert!(text(&cached.stderr).contains("Using cached image"));
+    assert_eq!(runs(), 1);
+
     // First build: the script runs once, with the serial, adb path and context folder.
-    let first = build(&[]);
-    assert_eq!(code(&first), 0, "{}", text(&first.stderr));
+    let first = allowed;
     let id = text(&first.stdout).trim().to_string();
     assert_eq!(
         id.len(),

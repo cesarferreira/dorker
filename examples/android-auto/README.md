@@ -27,7 +27,9 @@ PROVISION ./enable-dev-mode.sh
 ```
 
 `dorker run` runs the script once, while it builds the image, and the snapshot keeps the
-server running. The first `dorker run` takes about 1.5 minutes; after that an unchanged
+server running. It asks before running the script (it is code on your machine, so read
+it first; `--allow-provision` skips the question). The first `dorker run` takes about
+1.5 minutes; after that an unchanged
 Dorkerfile is a cache hit, and the instance starts in a few seconds with the server already
 listening (port 5277 in the guest).
 

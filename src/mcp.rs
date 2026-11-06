@@ -100,7 +100,7 @@ pub fn tools() -> Vec<Value> {
         tool(
             "dorker_build",
             "Build an image",
-            "Build an immutable image from a Dorkerfile (installs APKs, applies settings, saves a snapshot). Slow the first time (about a minute); instant if nothing changed.",
+            "Build an immutable image from a Dorkerfile (installs APKs, applies settings, saves a snapshot). Slow the first time (about a minute); instant if nothing changed. A Dorkerfile with PROVISION lines (host scripts) is refused here: the user must build it themselves with `dorker build --allow-provision`.",
             schema(
                 json!({
                     "context": {"type": "string", "description": "Build context directory containing the Dorkerfile (default \".\")"},
@@ -467,7 +467,13 @@ fn tail_chars(s: &str, max: usize) -> String {
 
 /// Run `dorker <argv>` and interpret its output per `kind`.
 pub fn run_cli(exe: &std::path::Path, inv: &Invocation) -> ToolResult {
-    let out = match Command::new(exe).args(&inv.argv).output() {
+    // A tool call must never be able to run host scripts (a Dorkerfile's PROVISION), even when
+    // the user's own shell has DORKER_ALLOW_PROVISION set, so the opt-in is removed here.
+    let out = match Command::new(exe)
+        .args(&inv.argv)
+        .env_remove("DORKER_ALLOW_PROVISION")
+        .output()
+    {
         Ok(o) => o,
         Err(e) => return ToolResult::text(format!("could not run dorker: {e}"), true),
     };

@@ -23,6 +23,50 @@ pub struct BuildArgs {
     pub no_cache: bool,
     /// Install a missing system image without asking (`--pull`).
     pub pull: bool,
+    /// Allow `PROVISION` scripts to run without asking (`--allow-provision`).
+    pub allow_provision: bool,
+}
+
+/// Decide whether the Dorkerfile's `PROVISION` scripts may run on this machine. They are
+/// arbitrary host code, so, like a Makefile target from a repository you have just cloned,
+/// they need consent: `--allow-provision` or `DORKER_ALLOW_PROVISION=1`, or a yes at the
+/// prompt on a terminal. Anything that cannot be asked (a script, CI, the MCP server) is
+/// refused unless the flag was given.
+fn authorize_provision(scripts: &[String], flag: bool) -> Result<()> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let env_ok = std::env::var("DORKER_ALLOW_PROVISION").is_ok_and(|v| !v.is_empty() && v != "0");
+    if flag || env_ok {
+        return Ok(());
+    }
+    let list = scripts
+        .iter()
+        .map(|s| format!("  {s}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let cfg = errors::with(errors::CONFIG);
+    if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
+        return Err(cfg(anyhow::anyhow!(
+            "this Dorkerfile runs scripts on your machine while building (PROVISION):\n{list}\n\n\
+             Read them, then re-run with --allow-provision (or set DORKER_ALLOW_PROVISION=1) to allow it."
+        )));
+    }
+    eprintln!("This Dorkerfile runs scripts on your machine while building (PROVISION):\n{list}");
+    for _ in 0..3 {
+        eprint!("Run them now? [y/N] ");
+        let _ = std::io::stderr().flush();
+        let mut line = String::new();
+        if std::io::stdin().lock().read_line(&mut line).unwrap_or(0) == 0 {
+            break;
+        }
+        match line.trim().to_ascii_lowercase().as_str() {
+            "y" | "yes" => return Ok(()),
+            "" | "n" | "no" => break,
+            _ => {}
+        }
+    }
+    Err(cfg(anyhow::anyhow!(
+        "not running the PROVISION scripts; the image was not built"
+    )))
 }
 
 pub struct ResolvedApk {
@@ -362,6 +406,9 @@ pub fn build_image(a: &BuildArgs) -> Result<ImageMeta> {
         images::touch_used(&store, &id);
         eprintln!("Using cached image {id} (identical Dorkerfile, APKs and toolchain)");
     } else {
+        if !df.provisions.is_empty() {
+            authorize_provision(&df.provisions, a.allow_provision)?;
+        }
         // A build holds the guest's RAM image (the snapshot) plus provisioned userdata.
         runtime::ensure_free_space(&store.root(), df.memory_mb * 1024 * 1024, "build an image")?;
         runtime::install_interrupt_handler();
