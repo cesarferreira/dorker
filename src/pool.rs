@@ -260,10 +260,26 @@ pub fn admit(
         String::new()
     };
     Err(format!(
-        "not enough capacity for {} worker(s):\n  {}\n\nThis is an estimate, not a measurement. {hint}stop other instances (`dorker ps`), or lower the reserve with DORKER_HOST_RESERVE_MB.",
+        "not enough capacity for {} worker(s):\n  {}\n\nThis is an estimate, not a measurement. {hint}stop other instances (`dorker ps`), lower the reserve with DORKER_HOST_RESERVE_MB, or pass --force to start anyway.",
         ours.workers,
         problems.join("\n  ")
     ))
+}
+
+/// With `--force`, a capacity failure is reported as a warning and the run goes ahead.
+fn forced(
+    result: std::result::Result<Vec<String>, String>,
+    force: bool,
+) -> std::result::Result<Vec<String>, String> {
+    match result {
+        Err(m) if force => {
+            let problems = m.split("\n\n").next().unwrap_or_default();
+            Ok(vec![format!(
+                "--force: starting anyway although the capacity check failed; the host may run out of resources.\n{problems}"
+            )])
+        }
+        other => other,
+    }
 }
 
 // ---------- host probes ----------
@@ -474,6 +490,8 @@ pub struct PoolSpec {
     pub startup_timeout: u64,
     pub pull: bool,
     pub reserve_mb: u64,
+    /// Start anyway when admission says the workers do not fit; the failure becomes a warning.
+    pub force: bool,
 }
 
 /// Progress of a pool, for the caller to present. Never printed on stdout by the pool.
@@ -554,6 +572,7 @@ pub struct Pool {
     startup_timeout: u64,
     pull: bool,
     reserve_mb: u64,
+    force: bool,
     probe: fn(&Store) -> HostSnapshot,
     /// Cancels everything (Ctrl-C, or the caller).
     cancel: Arc<AtomicBool>,
@@ -618,13 +637,16 @@ impl Pool {
         {
             let _lock = store.lock_pool().map_err(errors::with(errors::CONFLICT))?;
             let others = live_claims(&store, None);
-            let warnings = admit(
-                &probe(&store),
-                cost.fresh(spec.workers),
-                others,
-                &cost,
-                spec.reserve_mb,
-                runtime::min_free_bytes(),
+            let warnings = forced(
+                admit(
+                    &probe(&store),
+                    cost.fresh(spec.workers),
+                    others,
+                    &cost,
+                    spec.reserve_mb,
+                    runtime::min_free_bytes(),
+                ),
+                spec.force,
             )
             .map_err(|m| errors::with(errors::CONFLICT)(anyhow::anyhow!(m)))?;
             notes.extend(warnings);
@@ -641,6 +663,7 @@ impl Pool {
                 startup_timeout: spec.startup_timeout,
                 pull: spec.pull,
                 reserve_mb: spec.reserve_mb,
+                force: spec.force,
                 probe,
                 cancel: Arc::new(AtomicBool::new(false)),
                 stop_starts: Arc::new(AtomicBool::new(false)),
@@ -830,13 +853,16 @@ impl Pool {
             claim_of(&m, &self.store.load_all().unwrap_or_default())
         });
         let others = live_claims(&self.store, Some(&self.run_id));
-        let warnings = admit(
-            &(self.probe)(&self.store),
-            ours,
-            others,
-            &self.cost,
-            self.reserve_mb,
-            runtime::min_free_bytes(),
+        let warnings = forced(
+            admit(
+                &(self.probe)(&self.store),
+                ours,
+                others,
+                &self.cost,
+                self.reserve_mb,
+                runtime::min_free_bytes(),
+            ),
+            self.force,
         );
         warnings
             .map(|_| ())
@@ -1080,6 +1106,23 @@ mod tests {
     }
 
     #[test]
+    fn force_turns_a_capacity_failure_into_a_warning() {
+        let c = cost();
+        let h = host(Some(c.host_memory_mb), Some(100 * GB), 4);
+        let r = admit(&h, c.fresh(2), Claim::default(), &c, 2048, 0);
+        assert!(r.is_err());
+        let w = forced(r.clone(), true).unwrap();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].contains("--force") && w[0].contains("memory:"),
+            "{}",
+            w[0]
+        );
+        assert!(!w[0].contains("This is an estimate"), "{}", w[0]);
+        assert_eq!(forced(r.clone(), false), r);
+    }
+
+    #[test]
     fn other_runs_claims_count_against_the_same_capacity() {
         let c = cost();
         let h = host(Some(2048 + 4 * c.host_memory_mb), Some(100 * GB), 4);
@@ -1187,6 +1230,7 @@ mod tests {
             startup_timeout: 20,
             pull: false,
             reserve_mb: 0,
+            force: false,
         }
     }
 

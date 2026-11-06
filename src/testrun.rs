@@ -44,6 +44,8 @@ pub struct ImageTestArgs {
     pub startup_timeout: u64,
     pub json: bool,
     pub out: Option<PathBuf>,
+    /// Start even when the capacity check says the workers do not fit.
+    pub force: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -506,6 +508,7 @@ pub fn run(a: ImageTestArgs) -> Result<i32> {
             startup_timeout: a.startup_timeout,
             pull: false,
             reserve_mb: pool::host_reserve_mb(),
+            force: a.force,
         },
         pool::probe,
     )?;

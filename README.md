@@ -399,7 +399,8 @@ by the Dorkerfile), runs shard `i` of `N` on worker `i` with AndroidJUnitRunner'
 Ctrl-C or `SIGTERM`. It never touches instances it did not start. Before starting, it
 checks memory, disk and free ports for all workers and refuses with exit 8 (and how many
 workers would fit) if they do not fit; `DORKER_HOST_RESERVE_MB` (default 2048) is the
-memory it leaves for the host.
+memory it leaves for the host. The check is an estimate; pass `--force` to start the
+workers anyway (the failed check is printed as a warning, and the host may run low on memory).
 
 The run passes only if every shard ran to its final result, nothing failed, at least one
 test ran, no test was reported by two shards (a runner that ignores the shard arguments)

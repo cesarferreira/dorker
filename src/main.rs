@@ -194,6 +194,10 @@ enum Command {
         /// <out>/<run-id> (default: ~/.dorker/results/<run-id>)
         #[arg(long)]
         out: Option<std::path::PathBuf>,
+        /// With --image: start the workers even when the capacity check says they do not fit
+        /// (the failure is printed as a warning)
+        #[arg(long, requires = "image")]
+        force: bool,
     },
     /// Measure boot, restore, install and resource numbers for an image
     Bench {
@@ -504,6 +508,7 @@ fn run(cli: Cli) -> Result<i32> {
             timeout,
             json,
             out,
+            force,
         } => match image {
             Some(image) => testrun::run(testrun::ImageTestArgs {
                 image,
@@ -514,6 +519,7 @@ fn run(cli: Cli) -> Result<i32> {
                 startup_timeout: startup_timeout.unwrap_or(300),
                 json,
                 out,
+                force,
             }),
             None => testcmd::run(
                 instance.as_deref().unwrap_or_default(),

@@ -674,7 +674,10 @@ fn provision(
         n += 1;
         eprintln!("{} {text}", st.cyan(&format!("[{n}/{total}]")));
     };
-    step(format!("Booting temporary emulator to prepare the image ({})...", inst.serial()));
+    step(format!(
+        "Booting temporary emulator to prepare the image ({})...",
+        inst.serial()
+    ));
     runtime::wait_ready(
         sdk,
         store,
