@@ -46,9 +46,11 @@ itself. One crate, synchronous, no daemon.
    Process identity is therefore `-avd dorker -port <port>` plus the recorded pid.
 3. **Images are golden AVD homes.** `build` boots an AVD, provisions it, saves a
    snapshot, and publishes the directory atomically (`.partial` rename) to
-   `images/<fingerprint[..12]>`. `run` clones it (`cp -c`, copy-on-write on APFS)
-   and restores the snapshot from the clone. Images are never run directly: a
-   failed restore deletes the snapshot it could not load.
+   `images/<fingerprint[..12]>`. `run` clones it (`cp -c` on macOS, `cp -R --reflink=auto`
+   on Linux) and restores the snapshot from the clone. The clone is copy-on-write on APFS,
+   on XFS created with `reflink=1`, and on Btrfs; on ext4 and NFS it is a full copy of the
+   image. Images are never run directly: a failed restore deletes the snapshot it could
+   not load.
 4. **Fingerprint = cache key.** SHA-256 over system image + revision, emulator
    version, ABI, resources, device, resolution, headless, GPU mode, `INSTALL` file
    *content* hashes, `PROVISION` script content hashes, settings and snapshot name.
@@ -184,8 +186,9 @@ Transitions are validated by `State::can_become`.
 ```
 
 The store root is `~/.dorker` unless `DORKER_HOME` or the config file's `home` says
-otherwise. Instances are copy-on-write clones of images, so the root must be one
-filesystem.
+otherwise. A new instance is a clone of its image, which only works within one filesystem
+and only where that filesystem can clone: APFS, XFS with reflinks, or Btrfs. Put the store
+on a local disk of that kind. On NFS or ext4 every instance is a full copy.
 
 ## Not implemented yet
 

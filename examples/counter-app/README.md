@@ -77,8 +77,11 @@ is listed under `collection_errors` and never changes the verdict.
   test accounts or data per shard where it matters.
 - **Memory:** dorker budgets about 1.5x each worker's guest RAM plus 512 MB (here
   2 GB guests, so about 3.5 GB each) and keeps 2 GB for the host; it refuses to start more
-  workers than fit and says how many would. Keep `DORKER_HOME` on a local disk: on a
-  filesystem without copy-on-write clones every worker copies the image.
+  workers than fit and says how many would.
+- **Disk:** keep `DORKER_HOME` on a local filesystem that can clone files: APFS, XFS
+  created with `reflink=1`, or Btrfs. On NFS or ext4 every worker copies the whole image,
+  one at a time, and that copy can take longer than the tests. On this machine the same
+  two-worker run took 147 s from an NFS store and 57 s from local XFS.
 - **More workers is not always faster.** Each emulator wants its vCPUs; past the host's
   cores, boots slow down and timing-sensitive UI tests start to fail. See
   [docs/benchmarks.md](../../docs/benchmarks.md#parallel-instrumentation).

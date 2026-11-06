@@ -139,8 +139,10 @@ pub const EXAMPLE: &str = r#"# dorker configuration. Every setting is optional, 
 # Settings that differ between machines belong here, for example a Mac and a Linux box.
 
 # Where images and instances are kept (several GB each). Default: ~/.dorker
-# Also settable with DORKER_HOME. Keep it on one filesystem: instances are copy-on-write
-# clones of images, which only works inside a filesystem.
+# Also settable with DORKER_HOME. Keep the whole store on one local filesystem that can
+# clone files: APFS, XFS created with reflink=1, or Btrfs. A clone shares the image's
+# blocks until the instance writes. NFS and ext4 cannot clone, so every instance is a
+# full copy of the image.
 # home = "/mnt/big-disk/dorker"
 
 # The Android SDK. Default: ANDROID_HOME / ANDROID_SDK_ROOT, then ~/Library/Android/sdk and
