@@ -6,3 +6,6 @@ __pycache__/
 *.pyc
 *.apk
 *.xapk
+
+# Example lockfiles pin APK hashes of locally built (ignored) APKs, so they never match another machine
+examples/*/Dorkerfile.lock
