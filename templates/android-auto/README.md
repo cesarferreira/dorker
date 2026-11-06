@@ -8,13 +8,15 @@ and the head unit server running), use `android-auto-with-dev-mode` instead.
 
 ```bash
 cargo install apkeep       # once
-./fetch.sh                 # downloads the Android Auto .xapk
-dorker run -d --name auto  # builds this Dorkerfile, then runs it
+dorker run -d --name auto  # fetches the .xapk, builds, runs it
 dorker exec auto "pm list packages | grep gearhead"
 ```
 
-Replace the `.xapk` with a newer one and the next `dorker build` or `dorker run` makes a
-new image, because the file's hash is part of the image identity.
+The Dorkerfile's `FETCH ./fetch.sh` line makes dorker run `fetch.sh` (which downloads the
+latest `.xapk` with apkeep) only when the file is missing, and it asks first because it is a
+script on your machine. A file that is already there is never replaced: delete it, or run
+`./fetch.sh`, to get a newer one. A new file has a new hash, so the next `dorker build` or
+`dorker run` makes a new image.
 
 Notes:
 

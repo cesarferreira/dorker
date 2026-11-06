@@ -2001,3 +2001,112 @@ fn the_config_gpu_is_the_default_for_a_dorkerfile_without_one() {
     std::fs::write(ctx.join("Dorkerfile"), "FROM android:35\nGPU host\n").unwrap();
     assert_eq!(lock_gpu(&f).0, "gpu = \"host\"");
 }
+
+#[test]
+fn fetch_scripts_run_only_when_an_install_file_is_missing() {
+    let _guard = serial();
+    let f = Fake::new("fetch", true);
+    let ctx = f.root.join("ctx-fetch");
+    std::fs::create_dir_all(&ctx).unwrap();
+    let log = f.root.join("fetch.log");
+    let script = ctx.join("fetch.sh");
+    let body = |extra: &str| format!("#!/bin/sh\necho ran >> {}\n{extra}", log.display());
+    write_exec(&script, &body("printf apk > a.apk\n"));
+    std::fs::write(
+        ctx.join("Dorkerfile"),
+        "FROM android:35\nINSTALL ./a.apk\nFETCH ./fetch.sh\n",
+    )
+    .unwrap();
+    let build = |flag: bool| {
+        let mut a = vec!["build"];
+        if flag {
+            a.push("--allow-provision");
+        }
+        a.push(ctx.to_str().unwrap());
+        f.run(&a)
+    };
+    let runs = || {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .count()
+    };
+
+    // A missing file plus no consent: refused, and nothing ran.
+    let refused = build(false);
+    assert_eq!(code(&refused), 2, "{}", text(&refused.stderr));
+    let why = text(&refused.stderr);
+    assert!(
+        why.contains("FETCH ./fetch.sh") && why.contains("--allow-provision"),
+        "{why}"
+    );
+    assert_eq!(runs(), 0);
+    assert!(!ctx.join("a.apk").exists());
+
+    // With consent the script creates the file and the build goes on.
+    let ok = build(true);
+    assert_eq!(code(&ok), 0, "{}", text(&ok.stderr));
+    assert!(
+        text(&ok.stderr).contains("Fetching missing files (./a.apk) with ./fetch.sh"),
+        "{}",
+        text(&ok.stderr)
+    );
+    assert_eq!(runs(), 1);
+    assert!(ctx.join("a.apk").is_file());
+    let id = text(&ok.stdout).trim().to_string();
+
+    // The file is there now: no script, no consent needed, a cache hit.
+    let again = build(false);
+    assert_eq!(code(&again), 0, "{}", text(&again.stderr));
+    assert_eq!(text(&again.stdout).trim(), id);
+    assert_eq!(runs(), 1);
+
+    // Delete the file and it is fetched again (and asks again).
+    std::fs::remove_file(ctx.join("a.apk")).unwrap();
+    assert_eq!(code(&build(false)), 2);
+    assert_eq!(code(&build(true)), 0);
+    assert_eq!(runs(), 2);
+
+    // A script that does not make the file is an error that says so.
+    std::fs::remove_file(ctx.join("a.apk")).unwrap();
+    write_exec(&script, &body(""));
+    let lazy = build(true);
+    assert_eq!(code(&lazy), 2);
+    assert!(
+        text(&lazy.stderr).contains("still missing: ./a.apk"),
+        "{}",
+        text(&lazy.stderr)
+    );
+    // A failing script fails the build (exit 4).
+    write_exec(&script, &body("exit 3\n"));
+    let failed = build(true);
+    assert_eq!(code(&failed), 4, "{}", text(&failed.stderr));
+    assert!(
+        text(&failed.stderr).contains("FETCH script ./fetch.sh failed"),
+        "{}",
+        text(&failed.stderr)
+    );
+    // Without FETCH a missing file is the usual error.
+    std::fs::write(ctx.join("Dorkerfile"), "FROM android:35\nINSTALL ./a.apk\n").unwrap();
+    let plain = build(true);
+    assert_ne!(code(&plain), 0);
+    assert!(
+        text(&plain.stderr).contains("INSTALL path not found"),
+        "{}",
+        text(&plain.stderr)
+    );
+    // A script that is not executable is a configuration error.
+    std::fs::write(
+        ctx.join("Dorkerfile"),
+        "FROM android:35\nINSTALL ./a.apk\nFETCH ./fetch.sh\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let not_exec = build(true);
+    assert_eq!(code(&not_exec), 2);
+    assert!(
+        text(&not_exec.stderr).contains("not executable"),
+        "{}",
+        text(&not_exec.stderr)
+    );
+}

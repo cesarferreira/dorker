@@ -32,7 +32,8 @@ pub struct BuildArgs {
 /// they need consent: `--allow-provision` or `DORKER_ALLOW_PROVISION=1`, or a yes at the
 /// prompt on a terminal. Anything that cannot be asked (a script, CI, the MCP server) is
 /// refused unless the flag was given.
-fn authorize_provision(scripts: &[String], flag: bool) -> Result<()> {
+/// `scripts` are the lines to show, such as `FETCH ./fetch.sh` or `PROVISION ./setup.sh`.
+fn authorize_scripts(scripts: &[String], flag: bool) -> Result<()> {
     use std::io::{BufRead, IsTerminal, Write};
     let env_ok = std::env::var("DORKER_ALLOW_PROVISION").is_ok_and(|v| !v.is_empty() && v != "0");
     if flag || env_ok {
@@ -46,11 +47,11 @@ fn authorize_provision(scripts: &[String], flag: bool) -> Result<()> {
     let cfg = errors::with(errors::CONFIG);
     if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
         return Err(cfg(anyhow::anyhow!(
-            "this Dorkerfile runs scripts on your machine while building (PROVISION):\n{list}\n\n\
+            "this Dorkerfile runs scripts on your machine while building:\n{list}\n\n\
              Read them, then re-run with --allow-provision (or set DORKER_ALLOW_PROVISION=1) to allow it."
         )));
     }
-    eprintln!("This Dorkerfile runs scripts on your machine while building (PROVISION):\n{list}");
+    eprintln!("This Dorkerfile runs scripts on your machine while building:\n{list}");
     for _ in 0..3 {
         eprint!("Run them now? [y/N] ");
         let _ = std::io::stderr().flush();
@@ -65,7 +66,7 @@ fn authorize_provision(scripts: &[String], flag: bool) -> Result<()> {
         }
     }
     Err(cfg(anyhow::anyhow!(
-        "not running the PROVISION scripts; the image was not built"
+        "not running the scripts; the image was not built"
     )))
 }
 
@@ -295,6 +296,8 @@ pub fn build_image(a: &BuildArgs) -> Result<ImageMeta> {
     let df =
         dorkerfile::parse(&display, &source).map_err(|e| errors::with(errors::CONFIG)(e.into()))?;
     let tag = a.tag.as_deref().map(images::normalize_tag).transpose()?;
+    // FETCH scripts come first: INSTALL files must exist before they can be hashed.
+    let authorized = run_fetches(&df, &context, a.allow_provision)?;
 
     let sdk = Sdk::locate().map_err(errors::with(errors::DEPENDENCY))?;
     let sys = crate::commands::resolve_or_pull(
@@ -336,7 +339,7 @@ pub fn build_image(a: &BuildArgs) -> Result<ImageMeta> {
         .map(|w| {
             let path = resolve_directive_path(&context, w, "PROVISION")
                 .map_err(errors::with(errors::CONFIG))?;
-            require_executable(&path, w).map_err(errors::with(errors::CONFIG))?;
+            require_executable(&path, w, "PROVISION").map_err(errors::with(errors::CONFIG))?;
             let sha256 = sha256_file(&path)?;
             Ok(ResolvedApk {
                 written: w.clone(),
@@ -407,7 +410,12 @@ pub fn build_image(a: &BuildArgs) -> Result<ImageMeta> {
         eprintln!("Using cached image {id} (identical Dorkerfile, APKs and toolchain)");
     } else {
         if !df.provisions.is_empty() {
-            authorize_provision(&df.provisions, a.allow_provision)?;
+            let lines: Vec<String> = df
+                .provisions
+                .iter()
+                .map(|p| format!("PROVISION {p}"))
+                .collect();
+            authorize_scripts(&lines, authorized)?;
         }
         // A build holds the guest's RAM image (the snapshot) plus provisioned userdata.
         runtime::ensure_free_space(&store.root(), df.memory_mb * 1024 * 1024, "build an image")?;
@@ -525,12 +533,12 @@ pub(crate) fn adb_checked(sdk: &Sdk, serial: &str, args: &[&str], what: &str) ->
 }
 
 /// PROVISION scripts are run directly, so they need the executable bit.
-fn require_executable(path: &Path, written: &str) -> Result<()> {
+fn require_executable(path: &Path, written: &str, label: &str) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         if std::fs::metadata(path)?.permissions().mode() & 0o111 == 0 {
-            bail!("PROVISION script {written:?} is not executable; run `chmod +x {written}`");
+            bail!("{label} script {written:?} is not executable; run `chmod +x {written}`");
         }
     }
     #[cfg(not(unix))]
@@ -545,25 +553,39 @@ const PROVISION_TIMEOUT: Duration = Duration::from_secs(600);
 /// its only argument and in `ANDROID_SERIAL` / `DORKER_SERIAL`, the adb path in `ADB`, and
 /// runs in the build context folder. Its output goes to stderr (stdout carries the image id).
 fn run_provision(sdk: &Sdk, serial: &str, script: &ResolvedApk, context: &Path) -> Result<()> {
+    run_script("PROVISION", script, context, |c| {
+        c.arg(serial)
+            .env("ANDROID_SERIAL", serial)
+            .env("DORKER_SERIAL", serial)
+            .env("ADB", sdk.adb());
+    })
+}
+
+/// Run a host script from the Dorkerfile in the build context folder, with its stdout sent to
+/// stderr (stdout carries the image id). `configure` adds arguments and environment.
+fn run_script(
+    label: &str,
+    script: &ResolvedApk,
+    context: &Path,
+    configure: impl FnOnce(&mut std::process::Command),
+) -> Result<()> {
     use std::process::{Command, Stdio};
-    let mut child = Command::new(&script.path)
-        .arg(serial)
-        .current_dir(context)
-        .env("ANDROID_SERIAL", serial)
-        .env("DORKER_SERIAL", serial)
-        .env("ADB", sdk.adb())
+    let mut cmd = Command::new(&script.path);
+    cmd.current_dir(context)
         .stdin(Stdio::null())
         .stdout(Stdio::from(std::io::stderr()))
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    configure(&mut cmd);
+    let mut child = cmd
         .spawn()
-        .with_context(|| format!("starting PROVISION script {}", script.written))?;
+        .with_context(|| format!("starting {label} script {}", script.written))?;
     let started = std::time::Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
             if status.success() {
                 return Ok(());
             }
-            bail!("PROVISION script {} failed ({status})", script.written);
+            bail!("{label} script {} failed ({status})", script.written);
         }
         if runtime::interrupted() {
             let _ = child.kill();
@@ -574,13 +596,58 @@ fn run_provision(sdk: &Sdk, serial: &str, script: &ResolvedApk, context: &Path) 
             let _ = child.kill();
             let _ = child.wait();
             bail!(
-                "PROVISION script {} did not finish within {} s",
+                "{label} script {} did not finish within {} s",
                 script.written,
                 PROVISION_TIMEOUT.as_secs()
             );
         }
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// `FETCH` scripts create `INSTALL` files that are missing (for example by downloading them).
+/// They run only when a file is missing, so a cached build downloads nothing and a build stays
+/// reproducible; delete the file, or run the script yourself, to refresh it. Returns whether
+/// the user has already agreed to run the Dorkerfile's scripts.
+fn run_fetches(df: &Dorkerfile, context: &Path, flag: bool) -> Result<bool> {
+    let missing = |df: &Dorkerfile| -> Vec<String> {
+        df.installs
+            .iter()
+            .filter(|w| !context.join(w).exists())
+            .cloned()
+            .collect()
+    };
+    let wanted = missing(df);
+    if wanted.is_empty() || df.fetches.is_empty() {
+        return Ok(flag);
+    }
+    // Ask once for everything that will run, the PROVISION scripts included.
+    let mut lines: Vec<String> = df.fetches.iter().map(|f| format!("FETCH {f}")).collect();
+    lines.extend(df.provisions.iter().map(|p| format!("PROVISION {p}")));
+    authorize_scripts(&lines, flag)?;
+    let cfg = errors::with(errors::CONFIG);
+    for written in &df.fetches {
+        let path = resolve_directive_path(context, written, "FETCH").map_err(cfg)?;
+        require_executable(&path, written, "FETCH").map_err(cfg)?;
+        eprintln!(
+            "Fetching missing files ({}) with {written}",
+            wanted.join(", ")
+        );
+        let script = ResolvedApk {
+            written: written.clone(),
+            path,
+            sha256: String::new(),
+        };
+        run_script("FETCH", &script, context, |_| {}).map_err(errors::with(errors::BUILD))?;
+    }
+    let still = missing(df);
+    if !still.is_empty() {
+        return Err(cfg(anyhow::anyhow!(
+            "the FETCH script(s) ran but INSTALL file(s) are still missing: {}",
+            still.join(", ")
+        )));
+    }
+    Ok(true)
 }
 
 fn provision(

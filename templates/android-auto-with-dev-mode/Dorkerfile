@@ -1,7 +1,8 @@
 # Android Auto (Gearhead) on a Google Play image.
 #
 # The app ships as an .xapk bundle: a base APK plus split APKs. dorker installs them
-# together. Download the bundle first with ./fetch.sh (it is not committed).
+# together. The file is not committed: when it is missing, dorker runs ./fetch.sh (the FETCH
+# line below), which downloads the latest with apkeep. Delete the file to fetch it again.
 #
 # This needs a Play Store image: the plain google_apis image has an Android Auto stub signed
 # with the AOSP test key, which a Google-signed Android Auto cannot replace
@@ -16,6 +17,7 @@ DEVICE pixel_7
 HEADLESS true
 
 INSTALL ./com.google.android.projection.gearhead.xapk
+FETCH ./fetch.sh
 
 # Runs once, when the image is built: turns on Android Auto's developer mode and starts its
 # head unit server. The snapshot below keeps it running.

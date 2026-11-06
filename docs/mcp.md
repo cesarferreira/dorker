@@ -68,7 +68,7 @@ The server runs with your user's privileges and is meant for local, trusted agen
   instance and image names that start with `-` are rejected so they cannot become flags.
 - Screenshots never touch a temporary file: the PNG is read from the CLI's stdout (`dorker screenshot <instance> -`), so there is no predictable path for another local user to pre-create.
 - `pull: true` on `dorker_run` / `dorker_build` installs a missing system image, which is a download of 1 GB or more and lets Google's `android` CLI accept the Android SDK licences for the user. It is off by default, the tool descriptions tell the model to ask first, and without it a missing image is an error that names the option.
-- A Dorkerfile's `PROVISION` scripts run on the host, so the server refuses to build one: the CLI needs `--allow-provision` (or `DORKER_ALLOW_PROVISION=1`) or an answer at a terminal prompt, and the server never passes the flag and strips the environment variable from the CLI it starts. The user has to build such an image themselves.
+- A Dorkerfile's `PROVISION` and `FETCH` scripts run on the host, so the server refuses to build one: the CLI needs `--allow-provision` (or `DORKER_ALLOW_PROVISION=1`) or an answer at a terminal prompt, and the server never passes the flag and strips the environment variable from the CLI it starts. The user has to build such an image themselves.
 - ADB is not exposed on the network; instances use the emulator's local console and adb ports.
 - Tool calls run as separate `dorker` processes. Long calls (a build) do not block other requests.
 

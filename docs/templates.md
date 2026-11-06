@@ -45,5 +45,7 @@ in an empty folder, follow your own `next` steps, and say in the pull request wh
 on (CPU, `dorker --version`). Do not commit files you do not own, such as other people's APKs;
 download them with a script, like `fetch.sh` in `android-auto`.
 
-If a template needs to run a script on the host while building, use `PROVISION` in the
-Dorkerfile. `dorker` asks the user before running it, and the MCP server refuses it.
+If a template needs a script on the host, use `PROVISION` (runs against the build emulator)
+or `FETCH` (creates an `INSTALL` file that is missing, for example by downloading it) in the
+Dorkerfile. `dorker` asks the user before running either, and the MCP server refuses them.
+`android-auto` uses `FETCH ./fetch.sh` so that `dorker run` is the only command needed.

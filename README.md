@@ -240,10 +240,12 @@ templates are welcome as pull requests: see [docs/templates.md](docs/templates.m
 
 ### Run a script while building
 
-`PROVISION ./setup.sh` in a Dorkerfile runs a host script once, against the build emulator
+`FETCH ./get-apk.sh` runs a script when an `INSTALL` file is missing (to download it, say),
+and is never run again once the file exists. `PROVISION ./setup.sh` in a Dorkerfile runs a
+host script once, against the build emulator
 (it gets the adb serial). Use it for setup that needs the device, such as turning on a
 developer mode. The result is cached with the image: an unchanged script is not run again.
-Because it is code on your machine, `dorker build` / `dorker run` ask before running one
+Because they are code on your machine, `dorker build` / `dorker run` ask before running one
 (read it first); in scripts pass `--allow-provision` or set `DORKER_ALLOW_PROVISION=1`.
 See [docs/dorkerfile.md](docs/dorkerfile.md) and the `android-auto-with-dev-mode` template.
 

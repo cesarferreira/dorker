@@ -1,4 +1,4 @@
-# Android Auto example
+# Android Auto with developer mode
 
 Installs Google's Android Auto app (`com.google.android.projection.gearhead`) from an
 `.xapk` bundle, which is how it is usually distributed: a base APK plus split APKs for the
@@ -6,15 +6,16 @@ CPU architecture, language and screen density.
 
 ```bash
 cargo install apkeep       # once
-./fetch.sh                 # downloads the Android Auto .xapk
-
-dorker run -d --name auto  # builds this Dorkerfile (~1.5 min), then runs it
+dorker run -d --name auto  # fetches the .xapk, builds (~1.5 min), runs it
 dorker exec auto "pm list packages | grep gearhead"
 dorker rm -f auto
 ```
 
-Replace the `.xapk` with a newer one and the next `dorker build` or `dorker run` makes a
-new image, because the file's hash is part of the image identity.
+The Dorkerfile's `FETCH ./fetch.sh` line makes dorker run `fetch.sh` (which downloads the
+latest `.xapk` with apkeep) only when the file is missing, and it asks first because it is a
+script on your machine. A file that is already there is never replaced: delete it, or run
+`./fetch.sh`, to get a newer one. A new file has a new hash, so the next `dorker build` or
+`dorker run` makes a new image.
 
 ## The head unit server
 
@@ -27,7 +28,7 @@ PROVISION ./enable-dev-mode.sh
 ```
 
 `dorker run` runs the script once, while it builds the image, and the snapshot keeps the
-server running. It asks before running the script (it is code on your machine, so read
+server running. It asks once before running the scripts (they are code on your machine, so read
 it first; `--allow-provision` skips the question). The first `dorker run` takes about
 1.5 minutes; after that an unchanged
 Dorkerfile is a cache hit, and the instance starts in a few seconds with the server already

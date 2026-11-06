@@ -3,7 +3,7 @@
 use crate::units::{ImageRef, parse_size_mb};
 use std::fmt;
 
-const DIRECTIVES: [&str; 13] = [
+const DIRECTIVES: [&str; 14] = [
     "FROM",
     "MEMORY",
     "CPUS",
@@ -13,6 +13,7 @@ const DIRECTIVES: [&str; 13] = [
     "HEADLESS",
     "GPU",
     "INSTALL",
+    "FETCH",
     "PROVISION",
     "SETTING",
     "SNAPSHOT",
@@ -56,6 +57,8 @@ pub struct Dorkerfile {
     pub gpu: Option<String>,
     /// APK paths exactly as written (relative to the build context).
     pub installs: Vec<String>,
+    /// Host scripts that create missing `INSTALL` files (run only when one is missing).
+    pub fetches: Vec<String>,
     /// Host scripts run against the build emulator, in order, exactly as written.
     pub provisions: Vec<String>,
     pub settings: Vec<Setting>,
@@ -232,6 +235,7 @@ pub fn parse(file: &str, source: &str) -> Result<Dorkerfile, ParseError> {
         headless: true,
         gpu: None,
         installs: vec![],
+        fetches: vec![],
         provisions: vec![],
         settings: vec![],
         snapshot: None,
@@ -285,7 +289,7 @@ pub fn parse(file: &str, source: &str) -> Result<Dorkerfile, ParseError> {
                 ))
             }
         };
-        let singleton = !matches!(directive, "INSTALL" | "PROVISION" | "SETTING");
+        let singleton = !matches!(directive, "INSTALL" | "FETCH" | "PROVISION" | "SETTING");
         if singleton {
             if let Some(prev) = seen.insert(directive, line) {
                 return Err(err(
@@ -397,6 +401,10 @@ pub fn parse(file: &str, source: &str) -> Result<Dorkerfile, ParseError> {
             "INSTALL" => {
                 need(1)?;
                 d.installs.push(args[0].text.clone());
+            }
+            "FETCH" => {
+                need(1)?;
+                d.fetches.push(args[0].text.clone());
             }
             "PROVISION" => {
                 need(1)?;
@@ -530,6 +538,14 @@ mod tests {
             checked >= 2,
             "expected examples in the README and dorkerfile.md, found {checked}"
         );
+    }
+
+    #[test]
+    fn fetch_is_repeatable_and_needs_one_path() {
+        let d = p("FROM android:35\nFETCH ./a.sh\nFETCH ./b.sh\n").unwrap();
+        assert_eq!(d.fetches, vec!["./a.sh", "./b.sh"]);
+        assert!(p("FROM android:35\nFETCH\n").is_err());
+        assert!(p("FROM android:35\nFETCH a b\n").is_err());
     }
 
     #[test]

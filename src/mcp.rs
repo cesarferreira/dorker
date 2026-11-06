@@ -100,7 +100,7 @@ pub fn tools() -> Vec<Value> {
         tool(
             "dorker_build",
             "Build an image",
-            "Build an immutable image from a Dorkerfile (installs APKs, applies settings, saves a snapshot). Slow the first time (about a minute); instant if nothing changed. A Dorkerfile with PROVISION lines (host scripts) is refused here: the user must build it themselves with `dorker build --allow-provision`.",
+            "Build an immutable image from a Dorkerfile (installs APKs, applies settings, saves a snapshot). Slow the first time (about a minute); instant if nothing changed. A Dorkerfile with PROVISION or FETCH lines (host scripts) is refused here: the user must build it themselves with `dorker build --allow-provision`.",
             schema(
                 json!({
                     "context": {"type": "string", "description": "Build context directory containing the Dorkerfile (default \".\")"},
