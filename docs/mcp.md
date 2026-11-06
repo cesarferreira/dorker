@@ -51,6 +51,10 @@ exit-code meaning, so the model can read it and recover.
 Every tool maps to a CLI command with `--json`, so you can reproduce a call by hand, e.g.
 `dorker exec --json agent "pm list packages"`.
 
+`dorker_test` runs in one existing instance. To shard a suite across disposable instances,
+run `dorker test --image <image> --workers N --json` from a script instead: it prints one
+`dorker.test-run/1` object and leaves `summary.json` and `junit.xml` in its results folder.
+
 ## A typical session
 
 1. `dorker_doctor`: confirm the host is ready.

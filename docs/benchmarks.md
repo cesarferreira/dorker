@@ -151,3 +151,69 @@ treat it as a pessimistic CI-like environment, not bare-metal Linux. Boots were 
 (46-65 s) the first time an image was read from disk, and these numbers are from a warm
 page cache. The Mac's restore target (under 5 s) is **not** met here (9.2 s). Three runs, one machine. See "Idle CPU and memory" above for why the idle CPU figure
 originally listed here was wrong.
+
+## Parallel instrumentation
+
+`dorker test --image counter:dev --workers N --runner com.dorker.counter.test/androidx.test.runner.AndroidJUnitRunner`
+on 2026-11-06, on one machine, with the store in two places. One run per row, so treat them
+as indicative.
+
+The machine is the same for both tables: an Azure VM, AMD EPYC 7763, 8 vCPUs, 32 GB,
+Ubuntu 24.04.5, kernel 7.0.0-1017-azure, nested KVM, emulator 37.2.12.0, API 35
+`google_apis` x86_64, `swiftshader_indirect`, headless. The image is `examples/counter-app`
+(2 GB guest RAM, 2 CPUs, 11 Espresso tests).
+
+### Store on NFS: every worker is a full copy
+
+`~/.dorker` was on an Azure Files NFS mount. NFS cannot clone files, so each worker copied
+the 3.4 GB image, and the copies ran one at a time because they share `create.lock`.
+
+| Run | Wall time, start to cleanup | Startup per worker (queue + copy + boot) | Tests per shard | Lowest available host memory (of about 22.6 GB) | Result |
+|---|---|---|---|---|---|
+| serial instance mode | 161.8 s | 118.8 s | 39.5 s | not sampled | 11 passed |
+| `--workers 1` | 125.4 s | 84.1 s | 36.6 s | 18.8 GB | 11 passed |
+| `--workers 2` | 147.1 s | 96.0, 101.6 s | 45.5 s (8 tests), 24.9 s (3 tests) | 15.1 GB | 11 passed |
+| `--workers 4` | 220.7 s | 144.8 to 172.9 s | 14.6 s (0 tests) to 53.5 s (5 tests) | 8.6 GB | 9 passed, 2 failed |
+
+More workers were slower. The suite is about 40 s on one device, and each extra worker
+added a serial 3.4 GB copy plus a snapshot load over NFS (one load took 74 s).
+
+### Store on local XFS: workers are reflinks
+
+The same image, rebuilt with `home` pointed at the VM's local XFS disk (`/workspace/.dorker`,
+created with `reflink=1`). `dorker images` reported it as 2.2 GB. Each worker is a reflink
+of that image, so the copy itself is no longer the cost. There is no serial row for this
+store; `--workers 1` is the single-device number.
+
+| Run | Wall time, start to cleanup | Startup per worker (clone + boot) | Tests per shard | Result |
+|---|---|---|---|---|
+| `--workers 1` | 57.5 s | 11.3 s | 43.9 s | 11 passed |
+| `--workers 2` | 57.5 s | 18.6, 18.9 s | 35.7 s (8 tests), 22.3 s (3 tests) | 11 passed |
+| `--workers 4` | 85.6 s | 33.1 to 34.9 s | 11.2 s (0 tests) to 48.1 s (5 tests) | 10 passed, 1 failed |
+
+The first one-worker run (64.6 s) failed `showsStoredValueOnLaunch` because the window
+never took focus. The retry above passed. Two workers is the fastest passing run, and it
+is 147 s to 57 s against the NFS store. Four workers are still slower than two.
+
+### Reading both
+
+- **The filesystem decides whether sharding helps a short suite.** On a clone-capable
+  disk (APFS, XFS with `reflink=1`, Btrfs) a worker starts in about 11–19 s here and the
+  tests dominate. On NFS or ext4 the copy dominates, and adding workers adds time.
+- **Four workers oversubscribe this host either way.** Four 2-vCPU guests fill all 8 vCPUs
+  before the emulators' own threads. On NFS two Espresso tests timed out; on XFS
+  `resetGoesBackToZero` saw the counter stay at 1 after the reset click. Both runs
+  reported the failures in `junit.xml`, and the failing shards kept `failure.png`. In an
+  earlier NFS 4-worker run one shard's adb stream stopped mid-test; it was reported as
+  `incomplete`, and its log and screenshot collection hit their 30 s limits and were
+  recorded as `collection_errors`.
+- AndroidJUnitRunner splits by test, not by duration: with 4 shards one shard got no tests
+  and another got 5.
+- The union of the test ids in every sharded run's `junit.xml` was the same 11 tests as the
+  serial run. With the APKs built with `-PdorkerDemoFailure`, a 2-worker run on the NFS
+  store failed with exactly `DemoFailureTest#deliberateFailureWhenOptedIn` (exit 7).
+- Results folders on the NFS runs took 2.8 MB (1 worker), 4.2 MB (2) and 7.2 MB (4),
+  mostly `logcat.txt` and `failure.png`. A worker's copy of the image exists only while
+  that worker runs.
+- Not measured on macOS Apple Silicon yet. The Mac numbers earlier in this file are for
+  `dorker bench` (one instance), where an APFS clone of a fresh image was about 20 ms.

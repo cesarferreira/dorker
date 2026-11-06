@@ -113,7 +113,10 @@ Ubuntu 24.04 Azure VM with nested KVM, emulator 37.2.12.0, the SDK's own `qemu-s
 - `dorker pull android:35` really downloaded and installed `x86_64-35_r09` in 46 s (see the
   Android CLI notes below).
 - ext4 has no reflinks, so `cp --reflink=auto` falls back to a full copy of the ~3-4 GB image per
-  instance. That is correct but not free; on btrfs/xfs it would be a clone.
+  instance. XFS does clone when the filesystem was created with `reflink=1`, and so does Btrfs.
+  Measured here on 2026-11-06: with the store on Azure Files (NFS) one worker took 84 s to
+  start, because each worker copied the image over the network. The same image on the VM's
+  local XFS disk started a worker in 11 s. Both runs are in [docs/benchmarks.md](benchmarks.md).
 - SDK directories with a minor version (`android-36.1`) exist next to `android-36`; they are distinct
   images and are now modelled as such.
 - **Unexplained flake:** twice (the first e2e run, and one manual run, both the first boot after

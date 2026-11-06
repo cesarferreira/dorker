@@ -310,10 +310,18 @@ min_free_mb = 8192             # least free disk needed to start work
 An environment variable beats the file (`DORKER_HOME`, `ANDROID_HOME`,
 `DORKER_MIN_FREE_MB`), and so does a flag or a Dorkerfile line. `dorker config` shows
 each setting in effect and where it came from, `dorker config init` writes a commented
-example, and a mistake in the file is an error that names it. Keep `home` on one
-filesystem: instances are copy-on-write clones of images. `gpu` is part of an image's
+example, and a mistake in the file is an error that names it. `gpu` is part of an image's
 identity, so changing it rebuilds images. Things that carry a risk (`--pull`,
 `--allow-provision`) are not settable here: they stay a flag or an environment variable.
+
+Put `home` on one local filesystem that can clone files. A new instance is a clone of
+its image: `cp -c` on macOS (APFS) and `cp --reflink=auto` on Linux. That is a reflink on
+XFS created with `reflink=1`, and on Btrfs. The instance shares the image's blocks until
+it writes, so the copy finishes in milliseconds. NFS and ext4 cannot clone, and dorker
+then copies the whole image (several GB) for every instance. `~/.dorker` is on your home
+directory, which is often a network mount; point `home` or `DORKER_HOME` at a local disk
+before running several workers. The difference is measured in
+[docs/benchmarks.md](docs/benchmarks.md#parallel-instrumentation).
 
 ### See what is using disk
 
@@ -325,8 +333,10 @@ dorker ls --json
 It lists every image (tags, Android version, size, last used, how many instances use it),
 every instance (with its own size) and a storage summary: totals, how much `dorker prune`
 could reclaim, free space on the disk and the Android SDK system images dorker does not
-manage. On macOS (APFS) an instance shares disk blocks with its image, so its size is only
-what it wrote itself; elsewhere instances are full copies and are counted in full.
+manage. On macOS, `dorker ls` reports the space deleting an instance would free, which for
+an APFS clone is only what that instance wrote. A Linux reflink (XFS, Btrfs) shares blocks
+the same way, but `ls` cannot see that, so it counts the full allocated size and overstates
+the cost. On NFS and ext4 the copy really is full, and the number is exact.
 
 ### Free disk space
 
@@ -376,6 +386,37 @@ instrumentation output and logcat inside the instance, which `dorker rm` deletes
 `--out test-results` to copy them somewhere that survives (for CI artifacts).
 See [examples/instrumentation](examples/instrumentation) for a runnable example.
 
+#### Shard a suite across disposable emulators
+
+```bash
+dorker test --image myapp:ci --workers 4 \
+  --runner com.example.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+With `--image`, dorker starts `--workers` fresh instances of a built image (APKs installed
+by the Dorkerfile), runs shard `i` of `N` on worker `i` with AndroidJUnitRunner's
+`-e numShards N -e shardIndex i`, and removes every worker it started, also on failure,
+Ctrl-C or `SIGTERM`. It never touches instances it did not start. Before starting, it
+checks memory, disk and free ports for all workers and refuses with exit 8 (and how many
+workers would fit) if they do not fit; `DORKER_HOST_RESERVE_MB` (default 2048) is the
+memory it leaves for the host.
+
+The run passes only if every shard ran to its final result, nothing failed, at least one
+test ran, no test was reported by two shards (a runner that ignores the shard arguments)
+and cleanup succeeded. A worker that fails to start exits 5, an interrupt exits 130, any
+other broken run exits 7. Results go to `~/.dorker/results/<run-id>/` (or
+`--out <dir>/<run-id>/`) and outlive the workers: `summary.json` (schema
+`dorker.test-run/1`, also printed by `--json`), `junit.xml`, and `shards/<i>/` with
+`result.json`, `instrument.txt`, `logcat.txt`, `emulator.log` and, for a shard that did not
+pass, `failure.png`. `--class` applies to every shard; `--startup-timeout` (default 300s)
+bounds each worker's wait for its turn to clone the image and, separately, its boot;
+`--timeout` bounds each shard's tests. On a filesystem that can clone, that wait is short.
+On NFS or ext4 the workers copy the image one at a time, and for a short suite that copy
+costs more than the tests. Android Test Orchestrator is not supported in this mode.
+[examples/counter-app](examples/counter-app#run-the-suite-in-parallel) walks through a
+real app, the report files and a CI workflow; [docs/benchmarks.md](docs/benchmarks.md#parallel-instrumentation)
+has both measurements. The MCP server keeps running tests in one instance.
+
 ### Use it from AI agents
 
 `dorker mcp` is a Model Context Protocol server: an agent can start instances, install apps,
@@ -412,8 +453,9 @@ transitions and timings. Each instance also keeps its raw emulator output in
 | 4 | image build failed |
 | 5 | instance failed to start or boot |
 | 6 | adb operation failed |
-| 7 | instrumentation tests failed |
-| 8 | name, port or build conflict, or not enough free disk space |
+| 7 | instrumentation tests failed, or a sharded run was incomplete |
+| 8 | name, port or build conflict, not enough free disk space, or not enough capacity for `--workers` |
+| 130 | `dorker test --image` was interrupted (its workers are removed) |
 
 `dorker exec` returns the guest command's own exit status.
 
@@ -427,7 +469,8 @@ See [docs/architecture.md](docs/architecture.md) for design and limitations.
 - **Memory:** a 2GB guest used about 2.5GB of host memory after a cold boot and 3.3GB after a snapshot restore on macOS (3-3.7GB on Linux). Idle CPU is dominated by Android background work and takes about a minute to settle.
 - **Builds take about 45s** because dorker reboots the guest to persist provisioned state, plus the time of any `INSTALL`, `FETCH` and `PROVISION` steps.
 - **`CMD`** only supports `launch <package>`. `dorker start` always cold boots (about 14s) because restoring the image snapshot would roll back the instance's data. Rendering uses the Mac GPU (`host`) on macOS and software rendering (`swiftshader_indirect`) elsewhere; `GPU <mode>` in the Dorkerfile selects another. No mode was faster for snapshot restore in our measurements (see docs/benchmarks.md). There is no automatic test-APK discovery.
-- **Concurrency:** creating instances concurrently is safe, and `stop`, `rm` and `start` on the same instance are serialised by a per-instance lock (the second command waits up to 60s, then exits 8).
+- **Disk clones:** an instance is a copy-on-write clone of its image on APFS, and on Linux XFS (the filesystem must be created with `reflink=1`) and Btrfs. ext4 and NFS have no clone operation, so each instance is a full copy of the image. `dorker ls` reports a clone's private size only on macOS; on Linux it counts shared blocks again.
+- **Concurrency:** creating instances concurrently is safe, and `stop`, `rm` and `start` on the same instance are serialised by a per-instance lock (the second command waits up to 60s, then exits 8). Pool workers wait for the shared creation lock for up to their startup timeout, because a full copy (no reflink) can hold it for minutes.
 - **Orphans:** emulator processes that dorker started but lost track of (CLI killed mid-start) are reported by `dorker ps`; `dorker stop --orphans` stops them (after asking), but dorker never adopts them.
 - `examples/basic` and `examples/instrumentation` use tiny hand-built APKs; `examples/counter-app` is the realistic one.
 

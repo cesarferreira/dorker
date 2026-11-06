@@ -493,6 +493,7 @@ fn build_new(
         gpu: df.gpu_mode(),
         image_id: None,
         snapshot: None,
+        owner: None,
     };
     store.save(&inst)?;
     let started = (|| -> Result<()> {

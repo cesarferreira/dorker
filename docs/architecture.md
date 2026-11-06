@@ -23,6 +23,8 @@ itself. One crate, synchronous, no daemon.
 | `images.rs` | image metadata, tags, size accounting (clone-aware on APFS) |
 | `ls.rs`, `prune.rs` | `dorker ls` (images, instances, storage) and `dorker prune` |
 | `testcmd.rs` | `dorker test`: runs `am instrument -r`, parses the status protocol, keeps logs (`--out` copies them) |
+| `testrun.rs` | `dorker test --image`: one shard per pool worker, the aggregate verdict, `summary.json` |
+| `pool.rs` | worker pools: run ownership, resource admission, bounded parallel startup, cancellation and cleanup of a group of disposable instances |
 | `bench.rs` | `dorker bench` |
 | `errors.rs` | stable exit codes |
 | `mcp.rs` | `dorker mcp`: MCP server on stdio; each tool runs the CLI with `--json` |
@@ -44,9 +46,11 @@ itself. One crate, synchronous, no daemon.
    Process identity is therefore `-avd dorker -port <port>` plus the recorded pid.
 3. **Images are golden AVD homes.** `build` boots an AVD, provisions it, saves a
    snapshot, and publishes the directory atomically (`.partial` rename) to
-   `images/<fingerprint[..12]>`. `run` clones it (`cp -c`, copy-on-write on APFS)
-   and restores the snapshot from the clone. Images are never run directly: a
-   failed restore deletes the snapshot it could not load.
+   `images/<fingerprint[..12]>`. `run` clones it (`cp -c` on macOS, `cp -R --reflink=auto`
+   on Linux) and restores the snapshot from the clone. The clone is copy-on-write on APFS,
+   on XFS created with `reflink=1`, and on Btrfs; on ext4 and NFS it is a full copy of the
+   image. Images are never run directly: a failed restore deletes the snapshot it could
+   not load.
 4. **Fingerprint = cache key.** SHA-256 over system image + revision, emulator
    version, ABI, resources, device, resolution, headless, GPU mode, `INSTALL` file
    *content* hashes, `PROVISION` script content hashes, settings and snapshot name.
@@ -91,6 +95,47 @@ itself. One crate, synchronous, no daemon.
 15. **Templates are data.** `templates/<name>/` folders are embedded at build time, so
     `cargo install` ships them and a contribution is a folder. A test validates every
     template (metadata, the Dorkerfile parses, scripts are executable).
+16. **Worker pools own what they start** (`pool.rs`). A pool resolves its image tag once to
+    an image id, writes `runs/<run-id>/manifest.json` (owner pid, worker count, per-worker
+    estimate), and starts every worker through `commands::start_in` with
+    `owner = {run_id, worker}`. The owner is saved in `instance.json` before the emulator
+    spawns, so partial starts are recoverable. Cleanup removes only instances with this run
+    as owner, under each instance's `op.lock`, after re-reading it and checking process
+    identity; it never uses `stop --all` or orphan matching. A run that died without
+    cleaning up (SIGKILL) is detected by the next pool (owner pid gone, or no longer a
+    dorker process) and its instances are removed then. Ctrl-C, SIGTERM and SIGHUP all set
+    the same interrupt flag, which the pool's supervisor turns into cancellation.
+17. **Admission is an estimate.** Before starting, a pool compares what its workers need
+    (host memory estimated as 1.5x guest RAM + 512 MB, the clone's disk, a port pair, vCPUs)
+    with the host's available memory and free disk minus a host reserve (2 GB,
+    `DORKER_HOST_RESERVE_MB`) and minus what other live pools have claimed but not yet used.
+    Running instances are not subtracted again (the host figures already include them). It
+    refuses with exit code 8 rather than silently starting fewer workers, rechecks before
+    each worker starts, and warns (but still admits) when a metric cannot be read. Claims are
+    read and written under `locks/pool.lock`. It cannot guarantee the host never runs out of
+    memory. Clones still happen under `create.lock`, so on filesystems without reflinks the
+    workers' copy phase is serial.
+18. **Sharded tests are strict** (`testrun.rs`). `dorker test --image` runs shard `i` of `N`
+    on pool worker `i`, with the same runner and `--class` for every shard, and relies on
+    AndroidJUnitRunner's `numShards`/`shardIndex` to split the suite. Workers are not
+    reused, so there is no dynamic work queue. A shard counts only if its output reached
+    the runner's final `INSTRUMENTATION_CODE: -1`; a missing final code, a crash, a
+    timeout or a runner that did not start make the run incomplete, and a test reported by
+    two shards (the runner ignored the shard arguments) fails it. Exit-code precedence:
+    interrupt (130), startup failure (5), adb failure (6), incomplete or duplicated or
+    failed or empty (7), cleanup failure (1), pass (0). `summary.json` is written (atomically)
+    three times: with verdict `running` before any worker starts, with cleanup `pending`
+    once every shard has ended, and after cleanup; `junit.xml` with the last two.
+19. **Reports come from evidence.** Test durations are the host-side time between a test's
+    start and end status lines as they stream in; tests without both lines have none. JUnit
+    has one test case per reported result and never a synthesized pass; run-level problems
+    are `<error>` cases. Before a worker is removed, its `emulator.log` is copied and, unless
+    the shard passed or was cancelled, a screenshot is taken. Each collection step is bounded
+    (`DORKER_COLLECT_TIMEOUT_SECS`, default 30) and its failure is recorded, never fatal.
+20. **Store locks name their holder.** `create.lock` and `pool.lock` contain the holder's pid
+    and are broken only when that process is gone (or the pid is no longer dorker's), not
+    by age: without reflinks a clone can hold `create.lock` for minutes. Pool workers wait
+    for it up to their startup timeout; other commands give up after 10 s.
 
 ## Build pipeline
 
@@ -134,12 +179,16 @@ Transitions are validated by `State::can_become`.
 ├── instances/<id>/emulator.log
 ├── instances/<id>/test-*/        `dorker test` logs (die with the instance)
 ├── images/.<id>.partial/         a build or commit in progress (prune clears)
-└── locks/create.lock
+├── runs/<run-id>/manifest.json   a worker pool's owner and resource claim
+├── results/<run-id>/             `dorker test --image` reports (without --out)
+├── locks/create.lock             holds the holder's pid
+└── locks/pool.lock
 ```
 
 The store root is `~/.dorker` unless `DORKER_HOME` or the config file's `home` says
-otherwise. Instances are copy-on-write clones of images, so the root must be one
-filesystem.
+otherwise. A new instance is a clone of its image, which only works within one filesystem
+and only where that filesystem can clone: APFS, XFS with reflinks, or Btrfs. Put the store
+on a local disk of that kind. On NFS or ext4 every instance is a full copy.
 
 ## Not implemented yet
 

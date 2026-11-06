@@ -93,6 +93,17 @@ pub struct Instance {
     /// Snapshot to restore at start, if the image has one.
     #[serde(default)]
     pub snapshot: Option<String>,
+    /// The worker pool run that owns this instance, if any. Saved before the emulator is
+    /// spawned, so a pool can find and remove its partially started instances.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<RunOwner>,
+}
+
+/// Which pool run (and which worker in it) created an instance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunOwner {
+    pub run_id: String,
+    pub worker: u32,
 }
 
 fn default_gpu() -> String {
@@ -158,7 +169,9 @@ pub fn default_root() -> Result<PathBuf> {
 /// <root>/instances/<id>/instance.json   metadata (atomic writes)
 /// <root>/instances/<id>/avd/            private ANDROID_AVD_HOME for this instance
 /// <root>/instances/<id>/emulator.log
+/// <root>/runs/<run-id>/manifest.json    a worker pool's owner and resource claim
 /// <root>/locks/create.lock              serialises name/port allocation
+/// <root>/locks/pool.lock                serialises worker pool admission
 /// ```
 pub struct Store {
     root: PathBuf,
@@ -179,7 +192,7 @@ impl Store {
     }
 
     pub fn at(root: PathBuf) -> Result<Self> {
-        for sub in ["instances", "images", "locks"] {
+        for sub in ["instances", "images", "locks", "runs"] {
             fs::create_dir_all(root.join(sub))
                 .with_context(|| format!("creating {}", root.join(sub).display()))?;
         }
@@ -196,6 +209,10 @@ impl Store {
 
     pub fn images_dir(&self) -> PathBuf {
         self.root.join("images")
+    }
+
+    pub fn runs_dir(&self) -> PathBuf {
+        self.root.join("runs")
     }
 
     pub fn instance_dir(&self, id: &str) -> PathBuf {
@@ -293,30 +310,67 @@ impl Store {
 
     /// Take the store-wide creation lock (name + port allocation).
     pub fn lock_create(&self) -> Result<LockGuard> {
-        let path = self.root.join("locks").join("create.lock");
-        for _ in 0..100 {
+        self.lock_named("create.lock", LOCK_WAIT, &|| false)
+    }
+
+    /// The creation lock for a pool worker, which may queue behind other workers' clones
+    /// (minutes without reflinks): waits up to `wait`, and gives up when `cancelled`.
+    pub fn lock_create_queued(
+        &self,
+        wait: std::time::Duration,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<LockGuard> {
+        self.lock_named("create.lock", wait, cancelled)
+    }
+
+    /// Take the store-wide pool lock, held briefly while a worker pool reads and updates
+    /// resource claims, so two pools cannot both claim the same capacity.
+    pub fn lock_pool(&self) -> Result<LockGuard> {
+        self.lock_named("pool.lock", LOCK_WAIT, &|| false)
+    }
+
+    fn lock_named(
+        &self,
+        file: &str,
+        wait: std::time::Duration,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<LockGuard> {
+        let path = self.root.join("locks").join(file);
+        let start = std::time::Instant::now();
+        loop {
             match fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&path)
             {
-                Ok(_) => return Ok(LockGuard(path)),
+                Ok(mut f) => {
+                    use std::io::Write;
+                    let _ = write!(f, "{}", std::process::id());
+                    return Ok(LockGuard(path));
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     // Break locks left behind by a dead process.
                     if lock_is_stale(&path) {
                         let _ = fs::remove_file(&path);
-                    } else {
-                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        continue;
                     }
+                    if cancelled() {
+                        bail!("cancelled while waiting for {}", path.display());
+                    }
+                    if start.elapsed() > wait {
+                        bail!("timed out waiting for {}", path.display());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
                 Err(e) => return Err(e.into()),
             }
         }
-        bail!("timed out waiting for {}", path.display())
     }
 }
 
-fn pid_alive(pid: u32) -> bool {
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+pub(crate) fn pid_alive(pid: u32) -> bool {
     std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])
         .stderr(std::process::Stdio::null())
@@ -325,7 +379,17 @@ fn pid_alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
+/// A store lock records its holder's pid; it is stale once that process is gone (or the pid
+/// now belongs to something other than dorker). A lock without a pid (being written right
+/// now, or from an older dorker) is stale after 30s.
 fn lock_is_stale(path: &Path) -> bool {
+    let holder: Option<u32> = fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok());
+    if let Some(pid) = holder {
+        return !(pid_alive(pid)
+            && crate::runtime::cmdline_of(pid).is_some_and(|c| c.contains("dorker")));
+    }
     fs::metadata(path)
         .and_then(|m| m.modified())
         .ok()
@@ -395,6 +459,7 @@ mod tests {
             gpu: "swiftshader_indirect".into(),
             image_id: None,
             snapshot: None,
+            owner: None,
         }
     }
 
@@ -457,9 +522,45 @@ mod tests {
         let d = Dir::new();
         let store = Store::at(d.path().to_path_buf()).unwrap();
         let g = store.lock_create().unwrap();
-        assert!(d.path().join("locks/create.lock").exists());
+        let lock = d.path().join("locks/create.lock");
+        assert_eq!(
+            fs::read_to_string(&lock).unwrap(),
+            std::process::id().to_string()
+        );
         drop(g);
-        assert!(!d.path().join("locks/create.lock").exists());
+        assert!(!lock.exists());
+    }
+
+    #[test]
+    fn a_held_create_lock_is_not_broken_by_age_and_waiters_can_give_up() {
+        use std::time::{Duration, SystemTime};
+        let d = Dir::new();
+        let store = Store::at(d.path().to_path_buf()).unwrap();
+        let _g = store.lock_create().unwrap();
+        // A long clone keeps the lock for minutes; a live holder is never broken.
+        let lock = d.path().join("locks/create.lock");
+        let old = SystemTime::now() - Duration::from_secs(600);
+        fs::File::options()
+            .write(true)
+            .open(&lock)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let err = store
+            .lock_create_queued(Duration::from_millis(300), &|| false)
+            .unwrap_err();
+        assert!(err.to_string().contains("timed out"), "{err}");
+        let err = store
+            .lock_create_queued(Duration::from_secs(60), &|| true)
+            .unwrap_err();
+        assert!(err.to_string().contains("cancelled"), "{err}");
+        // A lock whose holder is dead is broken at once.
+        fs::write(&lock, "4294967294").unwrap();
+        assert!(
+            store
+                .lock_create_queued(Duration::from_millis(300), &|| false)
+                .is_ok()
+        );
     }
 
     #[test]
