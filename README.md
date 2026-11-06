@@ -257,6 +257,7 @@ Two directives run a script on your machine while an image is built. Both are ca
 the image, and both ask before they run (see below).
 
 ```dorkerfile
+FROM android:35
 INSTALL ./app.xapk
 FETCH ./fetch.sh      # creates app.xapk, but only when it is missing
 PROVISION ./setup.sh  # runs once, against the build emulator
