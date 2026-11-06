@@ -11,6 +11,10 @@
   </p>
 
   <p>
+    <img alt="A Dorkerfile: base image, resources, the APK to install, settings and a snapshot" src="https://raw.githubusercontent.com/cesarferreira/dorker/main/docs/images/dorkerfile.png" width="640">
+  </p>
+
+  <p>
     <a href="#install">Install</a>
     &nbsp;·&nbsp;
     <a href="#quickstart">Quickstart</a>
