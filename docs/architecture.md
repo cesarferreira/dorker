@@ -121,8 +121,19 @@ itself. One crate, synchronous, no daemon.
     timeout or a runner that did not start make the run incomplete, and a test reported by
     two shards (the runner ignored the shard arguments) fails it. Exit-code precedence:
     interrupt (130), startup failure (5), adb failure (6), incomplete or duplicated or
-    failed or empty (7), cleanup failure (1), pass (0). `summary.json` is written once with
-    cleanup pending and rewritten after cleanup, both atomically.
+    failed or empty (7), cleanup failure (1), pass (0). `summary.json` is written (atomically)
+    three times: with verdict `running` before any worker starts, with cleanup `pending`
+    once every shard has ended, and after cleanup; `junit.xml` with the last two.
+19. **Reports come from evidence.** Test durations are the host-side time between a test's
+    start and end status lines as they stream in; tests without both lines have none. JUnit
+    has one test case per reported result and never a synthesized pass; run-level problems
+    are `<error>` cases. Before a worker is removed, its `emulator.log` is copied and, unless
+    the shard passed or was cancelled, a screenshot is taken. Each collection step is bounded
+    (`DORKER_COLLECT_TIMEOUT_SECS`, default 30) and its failure is recorded, never fatal.
+20. **Store locks name their holder.** `create.lock` and `pool.lock` contain the holder's pid
+    and are broken only when that process is gone (or the pid is no longer dorker's), not
+    by age: without reflinks a clone can hold `create.lock` for minutes. Pool workers wait
+    for it up to their startup timeout; other commands give up after 10 s.
 
 ## Build pipeline
 
@@ -167,7 +178,8 @@ Transitions are validated by `State::can_become`.
 ├── instances/<id>/test-*/        `dorker test` logs (die with the instance)
 ├── images/.<id>.partial/         a build or commit in progress (prune clears)
 ├── runs/<run-id>/manifest.json   a worker pool's owner and resource claim
-├── locks/create.lock
+├── results/<run-id>/             `dorker test --image` reports (without --out)
+├── locks/create.lock             holds the holder's pid
 └── locks/pool.lock
 ```
 

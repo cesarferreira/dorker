@@ -13,6 +13,16 @@ android {
         versionCode = 1
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // ./gradlew -PdorkerDemoFailure ... makes DemoFailureTest fail on purpose.
+        buildConfigField(
+            "boolean",
+            "DEMO_FAILURE",
+            (project.findProperty("dorkerDemoFailure") != null).toString()
+        )
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {

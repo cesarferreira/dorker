@@ -81,7 +81,9 @@ case "$1" in
   reboot) touch "$FAKE_PIDDIR/$port.reboot" ;;
   install|install-multiple) echo "Success" ;;
   push) echo "1 file pushed" ;;
-  logcat) echo "fake logcat line" ;;
+  logcat)
+    [ "$2" = "-d" ] && [ -n "$FAKE_LOGCAT_HANG" ] && exec sleep 30 </dev/null >/dev/null 2>&1
+    echo "fake logcat line" ;;
   version) echo "Android Debug Bridge version 1.0.41" ;;
 esac
 "#;
@@ -154,7 +156,9 @@ impl Fake {
             .env_remove("FAKE_BLANK")
             .env_remove("FAKE_BLANK_FILE")
             .env_remove("FAKE_LIST_FILE")
-            .env_remove("FAKE_INSTRUMENT");
+            .env_remove("FAKE_INSTRUMENT")
+            .env_remove("FAKE_LOGCAT_HANG")
+            .env_remove("DORKER_COLLECT_TIMEOUT_SECS");
         c
     }
 
@@ -2193,7 +2197,12 @@ impl Fake {
             args.extend(["--runner", RUNNER]);
         }
         args.extend_from_slice(extra);
-        let mut c = self.cmd(&args);
+        self.suite_cmd(&args)
+    }
+
+    /// `dorker <args>` with the instrumentation stub and the five-test suite.
+    fn suite_cmd(&self, args: &[&str]) -> Command {
+        let mut c = self.cmd(args);
         c.env("FAKE_INSTRUMENT", self.root.join("instrument.sh"))
             .env("FAKE_TESTS", SUITE)
             .env("DORKER_HOST_RESERVE_MB", "0")
@@ -2230,9 +2239,83 @@ impl Fake {
     }
 }
 
+trait SpawnOutput {
+    fn spawn_output(&mut self) -> std::process::Child;
+}
+
+impl SpawnOutput for Command {
+    fn spawn_output(&mut self) -> std::process::Child {
+        self.stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    }
+}
+
 fn summary(o: &Output) -> serde_json::Value {
     serde_json::from_slice(&o.stdout)
         .unwrap_or_else(|e| panic!("{e}: stdout={} stderr={}", text(&o.stdout), text(&o.stderr)))
+}
+
+/// Check that the saved reports agree with the summary and with each other; returns the
+/// test ids in junit.xml (problems reported as `dorker` cases are left out).
+fn check_reports(s: &serde_json::Value) -> Vec<String> {
+    let dir = PathBuf::from(s["results_dir"].as_str().unwrap());
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("summary.json")).unwrap()).unwrap();
+    assert_eq!(&saved, s, "summary.json matches the printed summary");
+
+    let n = |v: &serde_json::Value| v.as_u64().unwrap();
+    let workers = s["workers"].as_array().unwrap();
+    let mut dirs = std::collections::HashSet::new();
+    for w in workers {
+        let wdir = PathBuf::from(w["dir"].as_str().unwrap());
+        assert!(dirs.insert(wdir.clone()), "shards share {}", wdir.display());
+        let r: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(wdir.join("result.json")).unwrap()).unwrap();
+        assert_eq!(r["schema"], "dorker.test-shard/1");
+        assert_eq!(r["shard"], w["shard"]);
+        assert_eq!(r["shard_count"], s["shards"]["requested"]);
+        assert_eq!(r["image_id"], s["image"]["id"]);
+        assert_eq!(r["status"], w["status"]);
+        let ran = n(&w["passed"]) + n(&w["failed"]) + n(&w["errors"]) + n(&w["ignored"]);
+        assert_eq!(r["tests"].as_array().unwrap().len() as u64, ran, "{r}");
+        for (name, path) in w["artifacts"].as_object().unwrap() {
+            assert!(
+                Path::new(path.as_str().unwrap()).is_file(),
+                "{name} listed but missing"
+            );
+        }
+    }
+
+    let xml = std::fs::read_to_string(dir.join("junit.xml")).unwrap();
+    let doc = roxmltree::Document::parse(&xml).expect("junit.xml is valid XML");
+    let root = doc.root_element();
+    let attr = |k: &str| root.attribute(k).unwrap().parse::<u64>().unwrap();
+    for k in ["tests", "failures", "errors", "skipped"] {
+        assert_eq!(attr(k), n(&s["junit"][k]), "junit {k}");
+    }
+    let problems = workers
+        .iter()
+        .filter(|w| !matches!(w["status"].as_str(), Some("passed" | "failed")))
+        .count() as u64
+        + s["duplicates"].as_array().unwrap().len() as u64
+        + s["cleanup"]["survivors"].as_array().map_or(0, |v| v.len()) as u64;
+    let results = n(&s["passed"]) + n(&s["failed"]) + n(&s["errors"]) + n(&s["ignored"]);
+    assert_eq!(attr("tests"), results + problems, "{xml}");
+    assert_eq!(attr("failures"), n(&s["failed"]));
+    assert_eq!(attr("errors"), n(&s["errors"]) + problems);
+    assert_eq!(attr("skipped"), n(&s["ignored"]));
+    doc.descendants()
+        .filter(|e| e.has_tag_name("testcase") && e.attribute("classname") != Some("dorker"))
+        .map(|e| {
+            format!(
+                "{}#{}",
+                e.attribute("classname").unwrap(),
+                e.attribute("name").unwrap()
+            )
+        })
+        .collect()
 }
 
 #[test]
@@ -2279,12 +2362,66 @@ fn image_mode_shards_the_suite_across_disposable_workers() {
         5
     );
 
-    // The summary on stdout is the one saved with the results.
+    // The reports agree, survive the workers, and together hold every test exactly once.
     let dir = PathBuf::from(s["results_dir"].as_str().unwrap());
     assert!(dir.starts_with(f.root.join("results")), "{}", dir.display());
-    let saved: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(dir.join("summary.json")).unwrap()).unwrap();
-    assert_eq!(saved, s);
+    f.assert_nothing_left();
+    let mut ids = check_reports(&s);
+    ids.sort();
+    let mut want: Vec<String> = SUITE.split(' ').map(String::from).collect();
+    want.sort();
+    assert_eq!(ids, want);
+    assert_eq!(s["junit"]["tests"], 5);
+    for w in workers {
+        let wdir = PathBuf::from(w["dir"].as_str().unwrap());
+        assert!(wdir.join("emulator.log").is_file());
+        assert!(
+            !wdir.join("failure.png").exists(),
+            "no screenshot for a pass"
+        );
+        assert!(w["collection_errors"].as_array().unwrap().is_empty(), "{w}");
+    }
+    let r: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("shards/0/result.json")).unwrap()).unwrap();
+    assert_eq!(r["tests"][0]["class"], "a.A");
+    assert_eq!(r["tests"][0]["status"], "passed");
+    assert!(r["tests"][0]["secs"].is_number(), "{r}");
+
+    // Without --out the results go to the store, and the folder is printed.
+    let out = f
+        .suite_cmd(&["test", "--image", "suite:1", "--runner", RUNNER])
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let err = text(&out.stderr);
+    assert!(
+        err.contains(&format!("results in {}", f.home.join("results").display())),
+        "{err}"
+    );
+    assert!(
+        text(&out.stdout).contains("PASSED (results: "),
+        "{}",
+        text(&out.stdout)
+    );
+    f.take_instrument_log();
+    f.assert_nothing_left();
+
+    // Runs started in the same second never share a results folder.
+    let both: Vec<_> = (0..2)
+        .map(|_| f.image_test("1", &[]).spawn_output())
+        .collect();
+    let dirs: Vec<String> = both
+        .into_iter()
+        .map(|c| {
+            let out = c.wait_with_output().unwrap();
+            assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+            let s = summary(&out);
+            check_reports(&s);
+            s["results_dir"].as_str().unwrap().to_string()
+        })
+        .collect();
+    assert_ne!(dirs[0], dirs[1]);
+    f.take_instrument_log();
     f.assert_nothing_left();
 
     // A class filter is passed unchanged to every shard.
@@ -2334,6 +2471,7 @@ fn image_mode_never_reports_a_broken_run_as_a_pass() {
         }
         f.take_instrument_log();
         f.assert_nothing_left();
+        check_reports(&s);
         s
     };
 
@@ -2348,6 +2486,26 @@ fn image_mode_never_reports_a_broken_run_as_a_pass() {
             .unwrap()
             .contains("AssertionError")
     );
+    // The failing shard keeps a screenshot of how it ended; the passing one does not.
+    let w = &s["workers"];
+    let png = PathBuf::from(w[0]["dir"].as_str().unwrap()).join("failure.png");
+    assert!(std::fs::read(&png).unwrap().starts_with(b"\x89PNG"));
+    assert_eq!(w[0]["artifacts"]["failure.png"], png.to_str().unwrap());
+    assert!(w[1]["artifacts"].get("failure.png").is_none());
+    let xml = std::fs::read_to_string(
+        PathBuf::from(s["results_dir"].as_str().unwrap()).join("junit.xml"),
+    )
+    .unwrap();
+    let doc = roxmltree::Document::parse(&xml).unwrap();
+    let failure = doc
+        .descendants()
+        .find(|e| e.has_tag_name("failure"))
+        .unwrap();
+    assert_eq!(failure.parent().unwrap().attribute("name"), Some("three"));
+    assert_eq!(
+        failure.attribute("message"),
+        Some("java.lang.AssertionError: boom in three")
+    );
 
     check(
         &[("FAKE_CRASH_SHARD", "1")],
@@ -2361,11 +2519,19 @@ fn image_mode_never_reports_a_broken_run_as_a_pass() {
         "incomplete",
         "incomplete",
     );
-    check(
+    let s = check(
         &[("FAKE_HANG_SHARD", "1")],
         &["--timeout", "2"],
         "incomplete",
         "timed_out",
+    );
+    let xml = std::fs::read_to_string(
+        PathBuf::from(s["results_dir"].as_str().unwrap()).join("junit.xml"),
+    )
+    .unwrap();
+    assert!(
+        xml.contains("name=\"shard 1 timed_out\"") && xml.contains("did not finish within 2s"),
+        "{xml}"
     );
     let s = check(
         &[],
@@ -2385,6 +2551,28 @@ fn image_mode_never_reports_a_broken_run_as_a_pass() {
     assert_eq!(s["duplicates"].as_array().unwrap().len(), 5, "{s}");
     // Zero tests across every shard is not a pass.
     check(&[("FAKE_TESTS", "")], &[], "empty", "");
+    // A diagnostic that cannot be collected is recorded and changes nothing else.
+    let out = f
+        .image_test("2", &[])
+        .env("FAKE_LOGCAT_HANG", "1")
+        .env("DORKER_COLLECT_TIMEOUT_SECS", "1")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let s = summary(&out);
+    check_reports(&s);
+    let errs = s["workers"][0]["collection_errors"].as_array().unwrap();
+    assert!(
+        errs.iter().any(|e| e
+            .as_str()
+            .unwrap()
+            .contains("logcat.txt: adb logcat did not finish within 1s")),
+        "{s}"
+    );
+    assert!(text(&out.stderr).contains("could not collect logcat.txt"));
+    f.take_instrument_log();
+    f.assert_nothing_left();
+
     // Empty shards are fine when another shard ran tests.
     let out = f
         .image_test("3", &[])
@@ -2423,6 +2611,7 @@ fn image_mode_startup_failures_and_bad_arguments() {
         "no tests on a failed pool"
     );
     f.assert_nothing_left();
+    check_reports(&s);
 
     // Not enough room is refused before anything starts.
     let out = f
@@ -2512,9 +2701,11 @@ fn image_mode_interrupts_remove_every_worker() {
             .status();
         let out = child.wait_with_output().unwrap();
         assert_eq!(code(&out), 130, "{signal}: {}", text(&out.stderr));
-        assert_eq!(summary(&out)["verdict"], "cancelled");
+        let s = summary(&out);
+        assert_eq!(s["verdict"], "cancelled");
         f.take_instrument_log();
         f.assert_nothing_left();
+        check_reports(&s);
     }
 }
 

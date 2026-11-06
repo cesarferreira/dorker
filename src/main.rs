@@ -7,6 +7,7 @@ mod doctor;
 mod dorkerfile;
 mod errors;
 mod images;
+mod junit;
 mod log;
 mod ls;
 mod mcp;

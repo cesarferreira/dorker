@@ -6,11 +6,11 @@ use crate::sdk::Sdk;
 use crate::store::{State, Store, now_secs};
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{BufRead, Read};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Report {
     pub passed: u32,
     pub failed: u32,
@@ -42,16 +42,30 @@ pub enum TestStatus {
     Skipped,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TestCase {
     pub class: String,
     pub test: String,
     pub status: TestStatus,
+    /// Seconds between the test's start and end status lines, as they arrived on the host.
+    /// None when the output was not timed or the start line is missing.
+    pub secs: Option<f64>,
 }
 
 impl TestCase {
     pub fn id(&self) -> String {
         format!("{}#{}", self.class, self.test)
+    }
+}
+
+impl TestStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TestStatus::Passed => "passed",
+            TestStatus::Failed => "failed",
+            TestStatus::Error => "error",
+            TestStatus::Skipped => "skipped",
+        }
     }
 }
 
@@ -66,15 +80,28 @@ impl Report {
 }
 
 /// Parse `am instrument -r` (raw) output.
+#[cfg(test)]
 pub fn parse(output: &str) -> Report {
+    parse_lines(output.lines().map(|l| (None, l)))
+}
+
+/// Parse output whose lines carry the time they arrived (seconds since the run started), so
+/// each test gets a measured duration.
+pub fn parse_timed(lines: &[(f64, String)]) -> Report {
+    parse_lines(lines.iter().map(|(t, l)| (Some(*t), l.as_str())))
+}
+
+fn parse_lines<'a>(lines: impl Iterator<Item = (Option<f64>, &'a str)>) -> Report {
     let mut r = Report::default();
     let mut block: HashMap<String, String> = HashMap::new();
     let mut last_key: Option<String> = None;
-    for line in output.lines() {
-        let line = line.trim_end_matches('\r');
+    let mut started: HashMap<String, f64> = HashMap::new();
+    for (at, line) in lines {
+        let line = line.trim_end_matches(['\r', '\n']);
         if let Some(rest) = line.strip_prefix("INSTRUMENTATION_STATUS_CODE:") {
             let code: i32 = rest.trim().parse().unwrap_or(i32::MIN);
             let get = |k: &str| block.get(k).cloned().unwrap_or_default();
+            let key = format!("{}#{}", get("class"), get("test"));
             if let Some(err) = block.get("Error") {
                 // The activity manager reports "could not start" as a status block.
                 r.failed_to_start = Some(err.clone()); // more specific than the onError line
@@ -109,13 +136,24 @@ pub fn parse(output: &str) -> Report {
                     r.ignored += 1;
                     Some(TestStatus::Skipped)
                 }
-                _ => None, // 1 = test started
+                1 => {
+                    if let Some(t) = at {
+                        started.insert(key.clone(), t);
+                    }
+                    None
+                }
+                _ => None,
             };
             if let Some(status) = status {
+                let secs = match (started.remove(&key), at) {
+                    (Some(s), Some(e)) => Some((e - s).max(0.0)),
+                    _ => None,
+                };
                 r.tests.push(TestCase {
                     class: get("class"),
                     test: get("test"),
                     status,
+                    secs,
                 });
             }
             block.clear();
@@ -288,6 +326,19 @@ pub struct Execution {
     pub status: Status,
     /// Seconds the instrumentation ran (not counting log collection).
     pub secs: f64,
+    /// Diagnostics that could not be collected, e.g. "logcat.txt: ...". They never change
+    /// the status.
+    pub collection_errors: Vec<String>,
+}
+
+/// How long one diagnostic collection (logcat dump, screenshot) may take.
+/// `DORKER_COLLECT_TIMEOUT_SECS` overrides the default of 30 seconds.
+pub fn collect_timeout() -> Duration {
+    let secs = std::env::var("DORKER_COLLECT_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+    Duration::from_secs(secs)
 }
 
 /// Run `cmd`, but give up (and kill it) after `limit`. For diagnostics that must not hang.
@@ -342,6 +393,7 @@ pub fn execute(
         runtime::adb(sdk, serial).args(["logcat", "-c"]),
         Duration::from_secs(10),
     );
+    let start = Instant::now();
     let mut child = runtime::adb(sdk, serial)
         .args(["shell", &instrument_command(o)])
         .stdout(Stdio::piped())
@@ -349,19 +401,25 @@ pub fn execute(
         .spawn()
         .context("running adb")
         .map_err(errors::with(errors::ADB))?;
-    let mut out_pipe = child.stdout.take().unwrap();
+    let out_pipe = child.stdout.take().unwrap();
     let mut err_pipe = child.stderr.take().unwrap();
+    // Each line is stamped when it arrives, which is what the per-test durations are.
     let out_t = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = out_pipe.read_to_string(&mut s);
-        s
+        let mut lines = Vec::new();
+        let mut reader = std::io::BufReader::new(out_pipe);
+        let mut buf = Vec::new();
+        while matches!(reader.read_until(b'\n', &mut buf), Ok(n) if n > 0) {
+            let at = start.elapsed().as_secs_f64();
+            lines.push((at, String::from_utf8_lossy(&buf).into_owned()));
+            buf.clear();
+        }
+        lines
     });
     let err_t = std::thread::spawn(move || {
         let mut s = String::new();
         let _ = err_pipe.read_to_string(&mut s);
         s
     });
-    let start = Instant::now();
     let (mut timed_out, mut was_cancelled) = (false, false);
     loop {
         if child.try_wait()?.is_some() {
@@ -377,22 +435,32 @@ pub fn execute(
         std::thread::sleep(Duration::from_millis(200));
     }
     let secs = start.elapsed().as_secs_f64();
-    let stdout = out_t.join().unwrap_or_default();
+    let mut lines = out_t.join().unwrap_or_default();
     let stderr = err_t.join().unwrap_or_default();
+    let stdout: String = lines.iter().map(|(_, l)| l.as_str()).collect();
     std::fs::write(logdir.join("instrument.txt"), format!("{stdout}{stderr}"))?;
-    if let Some(o) = output_within(
-        runtime::adb(sdk, serial).args(["logcat", "-d"]),
-        Duration::from_secs(30),
-    ) {
-        let _ = std::fs::write(logdir.join("logcat.txt"), o.stdout);
+    let mut collection_errors = Vec::new();
+    let limit = collect_timeout();
+    match output_within(runtime::adb(sdk, serial).args(["logcat", "-d"]), limit) {
+        Some(o) => {
+            if let Err(e) = std::fs::write(logdir.join("logcat.txt"), o.stdout) {
+                collection_errors.push(format!("logcat.txt: {e}"));
+            }
+        }
+        None => collection_errors.push(format!(
+            "logcat.txt: adb logcat did not finish within {}s",
+            limit.as_secs()
+        )),
     }
     // Some failures (e.g. "target has no code") arrive on stderr; parse both.
-    let report = parse(&format!("{stdout}{stderr}"));
+    lines.extend(stderr.lines().map(|l| (secs, l.to_string())));
+    let report = parse_timed(&lines);
     let status = Status::of(&report, timed_out, was_cancelled);
     Ok(Execution {
         report,
         status,
         secs,
+        collection_errors,
     })
 }
 
@@ -585,6 +653,31 @@ android.util.AndroidException: INSTRUMENTATION_FAILED: com.nope/com.nope.X\n\tat
             "INSTRUMENTATION_STATUS: class=a.B\nINSTRUMENTATION_STATUS: test=skip\nINSTRUMENTATION_STATUS_CODE: -3\nINSTRUMENTATION_CODE: -1\n",
         );
         assert_eq!(r.tests[0].status, TestStatus::Skipped);
+    }
+
+    #[test]
+    fn durations_come_from_when_the_status_lines_arrived() {
+        let lines: Vec<(f64, String)> = [
+            (0.5, "INSTRUMENTATION_STATUS: class=a.B"),
+            (0.5, "INSTRUMENTATION_STATUS: test=one"),
+            (0.5, "INSTRUMENTATION_STATUS_CODE: 1"),
+            (1.75, "INSTRUMENTATION_STATUS: class=a.B"),
+            (1.75, "INSTRUMENTATION_STATUS: test=one"),
+            (1.75, "INSTRUMENTATION_STATUS_CODE: 0"),
+            // No start line: no duration rather than a guess.
+            (2.0, "INSTRUMENTATION_STATUS: class=a.B"),
+            (2.0, "INSTRUMENTATION_STATUS: test=two"),
+            (2.0, "INSTRUMENTATION_STATUS_CODE: -3"),
+            (2.0, "INSTRUMENTATION_CODE: -1"),
+        ]
+        .iter()
+        .map(|(t, l)| (*t, format!("{l}\n")))
+        .collect();
+        let r = parse_timed(&lines);
+        assert_eq!(r.tests[0].secs, Some(1.25));
+        assert_eq!(r.tests[1].secs, None);
+        assert_eq!(r.final_code, Some(-1));
+        assert!(parse(PASS).tests.iter().all(|t| t.secs.is_none()));
     }
 
     #[test]

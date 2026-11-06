@@ -395,10 +395,15 @@ The run passes only if every shard ran to its final result, nothing failed, at l
 test ran, no test was reported by two shards (a runner that ignores the shard arguments)
 and cleanup succeeded. A worker that fails to start exits 5, an interrupt exits 130, any
 other broken run exits 7. Results go to `~/.dorker/results/<run-id>/` (or
-`--out <dir>/<run-id>/`): `summary.json` (schema `dorker.test-run/1`, also printed by
-`--json`) and `shards/<i>/` with `instrument.txt` and `logcat.txt`. `--class` applies to
-every shard; `--startup-timeout` (default 300s) bounds each worker's boot and `--timeout`
-each shard's tests. Android Test Orchestrator is not supported in this mode.
+`--out <dir>/<run-id>/`) and outlive the workers: `summary.json` (schema
+`dorker.test-run/1`, also printed by `--json`), `junit.xml`, and `shards/<i>/` with
+`result.json`, `instrument.txt`, `logcat.txt`, `emulator.log` and, for a shard that did not
+pass, `failure.png`. `--class` applies to every shard; `--startup-timeout` (default 300s)
+bounds each worker's wait for its turn to clone the image and, separately, its boot;
+`--timeout` bounds each shard's tests. Android Test Orchestrator is not supported in this
+mode. [examples/counter-app](examples/counter-app#run-the-suite-in-parallel) walks through a
+real app, the report files and a CI workflow; [docs/benchmarks.md](docs/benchmarks.md#parallel-instrumentation)
+has measurements. The MCP server keeps running tests in one instance.
 
 ### Use it from AI agents
 

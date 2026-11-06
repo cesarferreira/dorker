@@ -18,17 +18,19 @@
 //!   1 a worker could not be removed; 0 passed.
 
 use crate::errors;
+use crate::junit;
 use crate::pool::{self, Event, Outcome, Pool, PoolSpec};
 use crate::runtime;
 use crate::sdk::Sdk;
 use crate::store::{Instance, Store};
-use crate::testcmd::{self, Execution, Options, Report, Shard, Status};
+use crate::testcmd::{self, Execution, Options, Report, Shard, Status, TestStatus};
 use anyhow::Result;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub const SCHEMA: &str = "dorker.test-run/1";
+pub const SHARD_SCHEMA: &str = "dorker.test-shard/1";
 const INTERRUPTED: i32 = 130;
 
 pub struct ImageTestArgs {
@@ -87,7 +89,26 @@ pub struct ShardResult {
     /// Exit code of a startup failure.
     pub code: Option<i32>,
     pub dir: PathBuf,
+    /// Diagnostics that could not be collected; they never change the verdict.
+    pub collection_errors: Vec<String>,
 }
+
+/// What a worker's shard produced, collected before the worker is removed.
+struct ShardRun {
+    exec: Execution,
+    message: Option<String>,
+    collection_errors: Vec<String>,
+}
+
+/// Files a shard may leave in its folder. `failure.png` is taken after a shard did not pass:
+/// it shows the screen when the shard ended, not necessarily the failing assertion.
+const ARTIFACTS: [&str; 5] = [
+    "result.json",
+    "instrument.txt",
+    "logcat.txt",
+    "emulator.log",
+    "failure.png",
+];
 
 pub struct Aggregate {
     pub verdict: &'static str,
@@ -184,7 +205,205 @@ fn shard_json(s: &ShardResult) -> serde_json::Value {
         "ignored": r.map_or(0, |r| r.ignored),
         "message": s.message,
         "dir": s.dir,
+        "artifacts": artifacts_json(&s.dir),
+        "collection_errors": s.collection_errors,
     })
+}
+
+/// The shard's artifacts that exist, by file name.
+fn artifacts_json(dir: &Path) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    for name in ARTIFACTS {
+        let p = dir.join(name);
+        if p.is_file() || name == "result.json" {
+            m.insert(name.into(), serde_json::json!(p));
+        }
+    }
+    serde_json::Value::Object(m)
+}
+
+/// `shards/<i>/result.json`: the summary's entry for this shard plus every test it reported.
+fn shard_result_json(s: &ShardResult, count: u32, image_id: &str) -> serde_json::Value {
+    let mut v = shard_json(s);
+    let tests: Vec<_> = s
+        .report
+        .iter()
+        .flat_map(|r| &r.tests)
+        .map(|t| {
+            serde_json::json!({
+                "class": t.class, "test": t.test, "status": t.status.as_str(),
+                "secs": t.secs.map(|x| (x * 1000.0).round() / 1000.0),
+            })
+        })
+        .collect();
+    let failures: Vec<_> = s
+        .report
+        .iter()
+        .flat_map(|r| &r.failures)
+        .map(|f| serde_json::json!({"class": f.class, "test": f.test, "stack": f.stack}))
+        .collect();
+    let o = v.as_object_mut().unwrap();
+    o.insert("schema".into(), SHARD_SCHEMA.into());
+    o.insert("shard_count".into(), count.into());
+    o.insert("image_id".into(), image_id.into());
+    o.insert("tests".into(), tests.into());
+    o.insert("failures".into(), failures.into());
+    v
+}
+
+/// The JUnit report: one suite per shard, plus a `dorker` suite for run-level problems.
+fn junit_suites(
+    shards: &[ShardResult],
+    agg: &Aggregate,
+    count: u32,
+    image_id: &str,
+    survivors: &[(String, String)],
+) -> Vec<junit::Suite> {
+    use junit::{Case, Outcome, Suite};
+    let mut suites = Vec::new();
+    for s in shards {
+        let mut cases = Vec::new();
+        if let Some(r) = &s.report {
+            for t in &r.tests {
+                let stack = || {
+                    r.failures
+                        .iter()
+                        .find(|f| f.class == t.class && f.test == t.test)
+                        .map_or(String::new(), |f| f.stack.clone())
+                };
+                let outcome = match t.status {
+                    TestStatus::Passed => Outcome::Passed,
+                    TestStatus::Skipped => Outcome::Skipped,
+                    TestStatus::Failed => {
+                        let detail = stack();
+                        Outcome::Failure {
+                            message: junit::headline(&detail),
+                            detail,
+                        }
+                    }
+                    TestStatus::Error => {
+                        let detail = stack();
+                        Outcome::Error {
+                            message: junit::headline(&detail),
+                            detail,
+                        }
+                    }
+                };
+                cases.push(Case {
+                    class: t.class.clone(),
+                    name: t.test.clone(),
+                    secs: t.secs,
+                    outcome,
+                });
+            }
+        }
+        if !s.status.completed() {
+            let detail = s.message.clone().unwrap_or_default();
+            cases.push(Case {
+                class: "dorker".into(),
+                name: format!("shard {} {}", s.index, s.status.as_str()),
+                secs: None,
+                outcome: Outcome::Error {
+                    message: junit::headline(&detail),
+                    detail,
+                },
+            });
+        }
+        let mut properties = vec![
+            ("dorker.shard".to_string(), s.index.to_string()),
+            ("dorker.shard_count".to_string(), count.to_string()),
+            ("dorker.status".to_string(), s.status.as_str().to_string()),
+            ("dorker.image".to_string(), image_id.to_string()),
+        ];
+        if let Some(i) = &s.instance {
+            properties.push(("dorker.instance".to_string(), i.id.clone()));
+        }
+        suites.push(Suite {
+            name: format!("shard-{}", s.index),
+            hostname: s.instance.as_ref().map(|i| i.serial()),
+            secs: s.test_secs,
+            properties,
+            cases,
+        });
+    }
+    let mut run = Vec::new();
+    for (t, on) in &agg.duplicates {
+        run.push(Case {
+            class: "dorker".into(),
+            name: format!("duplicate {t}"),
+            secs: None,
+            outcome: Outcome::Error {
+                message: format!("{t} ran in shards {on:?}"),
+                detail: "the runner does not seem to honour numShards/shardIndex".into(),
+            },
+        });
+    }
+    for (id, e) in survivors {
+        run.push(Case {
+            class: "dorker".into(),
+            name: format!("cleanup {id}"),
+            secs: None,
+            outcome: Outcome::Error {
+                message: format!("could not remove worker instance {id}"),
+                detail: e.clone(),
+            },
+        });
+    }
+    if !run.is_empty() {
+        suites.push(Suite {
+            name: "dorker".into(),
+            hostname: None,
+            secs: None,
+            properties: vec![],
+            cases: run,
+        });
+    }
+    suites
+}
+
+fn write_junit(path: &Path, run_id: &str, suites: &[junit::Suite], secs: f64) -> Result<()> {
+    let tmp = path.with_extension("xml.tmp");
+    std::fs::write(
+        &tmp,
+        junit::render(&format!("dorker {run_id}"), suites, secs),
+    )?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Keep what a worker leaves behind before it is removed: its emulator log, and a screenshot
+/// when the shard did not pass. Each step is bounded; failures are recorded, never fatal.
+fn collect(
+    sdk: &Sdk,
+    serial: &str,
+    instance_dir: &Path,
+    dir: &Path,
+    status: Status,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if let Err(e) = std::fs::copy(instance_dir.join("emulator.log"), dir.join("emulator.log")) {
+        errors.push(format!("emulator.log: {e}"));
+    }
+    if matches!(status, Status::Passed | Status::Cancelled) {
+        return errors;
+    }
+    let limit = testcmd::collect_timeout();
+    match testcmd::output_within(
+        runtime::adb(sdk, serial).args(["exec-out", "screencap", "-p"]),
+        limit,
+    ) {
+        Some(o) if o.stdout.starts_with(b"\x89PNG\r\n\x1a\n") => {
+            if let Err(e) = std::fs::write(dir.join("failure.png"), &o.stdout) {
+                errors.push(format!("failure.png: {e}"));
+            }
+        }
+        Some(_) => errors.push("failure.png: screencap did not return a PNG".into()),
+        None => errors.push(format!(
+            "failure.png: screencap did not finish within {}s",
+            limit.as_secs()
+        )),
+    }
+    errors
 }
 
 fn round(s: f64) -> f64 {
@@ -200,6 +419,7 @@ fn summary_json(
     cleanup: serde_json::Value,
     dir: &Path,
     elapsed: f64,
+    junit: junit::Counts,
 ) -> serde_json::Value {
     let failures: Vec<_> = shards
         .iter()
@@ -228,6 +448,7 @@ fn summary_json(
         "duplicates": agg.duplicates.iter().map(|(t, s)| serde_json::json!({"test": t, "shards": s})).collect::<Vec<_>>(),
         "workers": shards.iter().map(shard_json).collect::<Vec<_>>(),
         "cleanup": cleanup,
+        "junit": junit,
         "results_dir": dir,
         "elapsed_secs": round(elapsed),
     })
@@ -299,6 +520,26 @@ pub fn run(a: ImageTestArgs) -> Result<i32> {
         }
     };
     let shard_dir = |i: u32| dir.join("shards").join(i.to_string());
+    let summary_path = dir.join("summary.json");
+    let junit_path = dir.join("junit.xml");
+    // Written before anything starts, so even a killed run leaves its identity behind.
+    let mut running = summary_json(
+        &a,
+        &pool,
+        &[],
+        &aggregate(&[], true, false),
+        serde_json::json!({"status": "pending"}),
+        &dir,
+        0.0,
+        junit::Counts::default(),
+    );
+    running["verdict"] = "running".into();
+    running["exit_code"] = serde_json::Value::Null;
+    running["ok"] = false.into();
+    if let Err(e) = write_json(&summary_path, &running) {
+        pool.cleanup();
+        return Err(e.context(format!("writing {}", summary_path.display())));
+    }
     eprintln!(
         "Running {} on {} worker(s) from image {} ({}); results in {}",
         a.runner,
@@ -334,52 +575,57 @@ pub fn run(a: ImageTestArgs) -> Result<i32> {
         }
     };
     let workers = pool.workers;
-    let results = pool.run(
-        &events,
-        |w, cancelled| -> Result<(Execution, Option<String>)> {
-            let shard = Shard::new(workers, w.index)?;
-            let opts = Options {
-                runner: &a.runner,
-                class: a.class.as_deref(),
-                timeout: a.timeout,
-                shard: Some(shard),
-            };
-            let serial = w.started.inst.serial();
-            let exec = testcmd::execute(
-                &w.started.sdk,
-                &serial,
-                &opts,
-                &shard_dir(w.index),
-                cancelled,
-            )?;
-            let message = match exec.status {
-                Status::NotStarted => Some(format!(
-                    "{}\n{}",
-                    exec.report.failed_to_start.clone().unwrap_or_default(),
-                    testcmd::explain_not_started(&w.started.sdk, &serial)
-                )),
-                Status::RunnerError => {
-                    Some("the instrumentation process crashed or ended abnormally".into())
-                }
-                Status::Incomplete => {
-                    Some("the output stopped before the runner's final result".into())
-                }
-                Status::TimedOut => Some(format!("did not finish within {}s", a.timeout)),
-                _ => None,
-            };
-            eprintln!(
-                "[shard {}] {}: {} passed, {} failed, {} errors, {} ignored in {:.1}s",
-                w.index,
-                exec.status.as_str(),
-                exec.report.passed,
-                exec.report.failed,
-                exec.report.errors,
-                exec.report.ignored,
-                exec.secs
-            );
-            Ok((exec, message))
-        },
-    );
+    let store = pool.store();
+    let results = pool.run(&events, |w, cancelled| -> Result<ShardRun> {
+        let shard = Shard::new(workers, w.index)?;
+        let opts = Options {
+            runner: &a.runner,
+            class: a.class.as_deref(),
+            timeout: a.timeout,
+            shard: Some(shard),
+        };
+        let serial = w.started.inst.serial();
+        let sdir = shard_dir(w.index);
+        let exec = testcmd::execute(&w.started.sdk, &serial, &opts, &sdir, cancelled)?;
+        let message = match exec.status {
+            Status::NotStarted => Some(format!(
+                "{}\n{}",
+                exec.report.failed_to_start.clone().unwrap_or_default(),
+                testcmd::explain_not_started(&w.started.sdk, &serial)
+            )),
+            Status::RunnerError => {
+                Some("the instrumentation process crashed or ended abnormally".into())
+            }
+            Status::Incomplete => {
+                Some("the output stopped before the runner's final result".into())
+            }
+            Status::TimedOut => Some(format!("did not finish within {}s", a.timeout)),
+            _ => None,
+        };
+        eprintln!(
+            "[shard {}] {}: {} passed, {} failed, {} errors, {} ignored in {:.1}s",
+            w.index,
+            exec.status.as_str(),
+            exec.report.passed,
+            exec.report.failed,
+            exec.report.errors,
+            exec.report.ignored,
+            exec.secs
+        );
+        let mut collection_errors = exec.collection_errors.clone();
+        collection_errors.extend(collect(
+            &w.started.sdk,
+            &serial,
+            &store.instance_dir(&w.started.inst.id),
+            &sdir,
+            exec.status,
+        ));
+        Ok(ShardRun {
+            exec,
+            message,
+            collection_errors,
+        })
+    });
 
     let mut shards = Vec::new();
     for r in results {
@@ -397,6 +643,7 @@ pub fn run(a: ImageTestArgs) -> Result<i32> {
             message: None,
             code: None,
             dir: d.clone(),
+            collection_errors: vec![],
         };
         match r.outcome {
             Outcome::Completed {
@@ -409,11 +656,12 @@ pub fn run(a: ImageTestArgs) -> Result<i32> {
                 s.restored = Some(restored);
                 s.ready_secs = Some(ready_secs);
                 match value {
-                    Ok((exec, message)) => {
-                        s.status = ShardStatus::Ran(exec.status);
-                        s.test_secs = Some(exec.secs);
-                        s.report = Some(exec.report);
-                        s.message = message;
+                    Ok(run) => {
+                        s.status = ShardStatus::Ran(run.exec.status);
+                        s.test_secs = Some(run.exec.secs);
+                        s.report = Some(run.exec.report);
+                        s.message = run.message;
+                        s.collection_errors = run.collection_errors;
                     }
                     Err(e) => {
                         s.status = ShardStatus::AdbFailed;
@@ -425,20 +673,45 @@ pub fn run(a: ImageTestArgs) -> Result<i32> {
                 s.status = ShardStatus::StartupFailed;
                 s.code = Some(errors::code_of(&error));
                 s.message = Some(format!("{error:#}"));
-                if let Some(i) = &inst {
-                    let log = pool.store().instance_dir(&i.id).join("emulator.log");
-                    let _ = std::fs::copy(log, d.join("emulator.log"));
-                }
                 s.instance = inst;
             }
             Outcome::Cancelled { inst } => s.instance = inst,
+        }
+        // A worker that never ran a shard is still around until cleanup: keep its log.
+        if let (false, Some(i)) = (d.join("emulator.log").is_file(), &s.instance) {
+            let log = pool.store().instance_dir(&i.id).join("emulator.log");
+            if log.is_file() {
+                if let Err(e) = std::fs::copy(log, d.join("emulator.log")) {
+                    s.collection_errors.push(format!("emulator.log: {e}"));
+                }
+            }
+        }
+        // On slow hosts the emulator logs a completed restore only after the device is
+        // ready, so the full log copied afterwards is the better witness.
+        if s.restored == Some(false)
+            && std::fs::read_to_string(d.join("emulator.log"))
+                .is_ok_and(|t| t.contains("Successfully loaded snapshot"))
+        {
+            s.restored = Some(true);
+        }
+        if let Err(e) = write_json(
+            &d.join("result.json"),
+            &shard_result_json(&s, workers, &pool.image.id),
+        ) {
+            s.collection_errors.push(format!("result.json: {e:#}"));
         }
         shards.push(s);
     }
 
     let interrupted = runtime::interrupted();
-    let summary_path = dir.join("summary.json");
     let pending = aggregate(&shards, true, interrupted);
+    let suites = junit_suites(&shards, &pending, workers, &pool.image.id, &[]);
+    let _ = write_junit(
+        &junit_path,
+        &pool.run_id,
+        &suites,
+        t0.elapsed().as_secs_f64(),
+    );
     let _ = write_json(
         &summary_path,
         &summary_json(
@@ -449,6 +722,7 @@ pub fn run(a: ImageTestArgs) -> Result<i32> {
             serde_json::json!({"status": "pending"}),
             &dir,
             t0.elapsed().as_secs_f64(),
+            junit::counts(&suites),
         ),
     );
     let cleanup = pool.cleanup();
@@ -458,6 +732,9 @@ pub fn run(a: ImageTestArgs) -> Result<i32> {
         "removed": cleanup.removed,
         "survivors": cleanup.survivors.iter().map(|(i, e)| serde_json::json!({"instance": i, "error": e})).collect::<Vec<_>>(),
     });
+    let elapsed = t0.elapsed().as_secs_f64();
+    let suites = junit_suites(&shards, &agg, workers, &pool.image.id, &cleanup.survivors);
+    write_junit(&junit_path, &pool.run_id, &suites, elapsed)?;
     let summary = summary_json(
         &a,
         &pool,
@@ -465,20 +742,15 @@ pub fn run(a: ImageTestArgs) -> Result<i32> {
         &agg,
         cleanup_json,
         &dir,
-        t0.elapsed().as_secs_f64(),
+        elapsed,
+        junit::counts(&suites),
     );
     write_json(&summary_path, &summary)?;
 
     if a.json {
         println!("{}", serde_json::to_string_pretty(&summary)?);
     } else {
-        print_table(
-            &shards,
-            &agg,
-            pool.workers,
-            t0.elapsed().as_secs_f64(),
-            &dir,
-        );
+        print_table(&shards, &agg, pool.workers, elapsed, &dir);
     }
     for (id, e) in &cleanup.survivors {
         eprintln!("error: could not remove worker instance {id}: {e}");
@@ -490,6 +762,9 @@ pub fn run(a: ImageTestArgs) -> Result<i32> {
         ) = (s.status, &s.message)
         {
             eprintln!("error: shard {}: {m}", s.index);
+        }
+        for e in &s.collection_errors {
+            eprintln!("warning: shard {}: could not collect {e}", s.index);
         }
     }
     for (t, s) in &agg.duplicates {
@@ -582,6 +857,7 @@ mod tests {
                 class: "a.B".into(),
                 test: name.to_string(),
                 status: *status,
+                secs: None,
             });
         }
         r
@@ -600,6 +876,7 @@ mod tests {
             message: None,
             code: None,
             dir: PathBuf::new(),
+            collection_errors: vec![],
         }
     }
 

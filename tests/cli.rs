@@ -902,6 +902,28 @@ fn sharded_image_test_on_two_disposable_workers() {
     let dir = PathBuf::from(s["results_dir"].as_str().unwrap());
     assert!(dir.join("summary.json").is_file());
     assert!(dir.join("shards/1/logcat.txt").is_file());
+    // The reports outlive the workers: every test once, the failure with its evidence.
+    let xml = std::fs::read_to_string(dir.join("junit.xml")).unwrap();
+    let doc = roxmltree::Document::parse(&xml).unwrap();
+    let mut ids: Vec<_> = doc
+        .descendants()
+        .filter(|e| e.has_tag_name("testcase"))
+        .map(|e| e.attribute("name").unwrap().to_string())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, ["alsoPassing", "failing", "passing"]);
+    assert_eq!(s["junit"]["failures"], 1);
+    let failing = w.iter().find(|w| w["failed"] == 1).unwrap();
+    let fdir = PathBuf::from(failing["dir"].as_str().unwrap());
+    assert!(
+        std::fs::read(fdir.join("failure.png"))
+            .unwrap()
+            .starts_with(b"\x89PNG")
+    );
+    for w in w {
+        let d = PathBuf::from(w["dir"].as_str().unwrap());
+        assert!(d.join("result.json").is_file() && d.join("emulator.log").is_file());
+    }
 
     // A passing selection exits 0 even though the second shard has nothing to run.
     let (c, s) = image_test(&["--class", "com.dorker.sample.SampleTests#passing"]);

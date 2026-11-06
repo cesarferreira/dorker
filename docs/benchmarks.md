@@ -151,3 +151,43 @@ treat it as a pessimistic CI-like environment, not bare-metal Linux. Boots were 
 (46-65 s) the first time an image was read from disk, and these numbers are from a warm
 page cache. The Mac's restore target (under 5 s) is **not** met here (9.2 s). Three runs, one machine. See "Idle CPU and memory" above for why the idle CPU figure
 originally listed here was wrong.
+
+## Parallel instrumentation
+
+`dorker test --image counter:dev --workers N --runner com.dorker.counter.test/androidx.test.runner.AndroidJUnitRunner`
+on 2026-11-06, against a serial `dorker run` + `dorker test` + `dorker rm` of the same image.
+One run per row, so treat them as indicative.
+
+| | |
+|---|---|
+| Machine | Azure VM, AMD EPYC 7763, 8 vCPUs, 32 GB, Ubuntu 24.04.5, kernel 7.0.0-1017-azure, nested KVM |
+| Emulator | 37.2.12.0, API 35 `google_apis` x86_64, `swiftshader_indirect`, headless |
+| Image | `examples/counter-app` (2 GB guest RAM, 2 CPUs, 3.4 GB on disk), 11 Espresso tests |
+| Store | `~/.dorker` on an Azure Files NFS mount: no copy-on-write clones, so every worker copies the 3.4 GB image, one at a time |
+
+| Run | Wall time, start to cleanup | Startup per worker (queue + clone + boot) | Tests per shard | Lowest available host memory (of about 22.6 GB) | Result |
+|---|---|---|---|---|---|
+| serial instance mode | 161.8 s | 118.8 s | 39.5 s | not sampled | 11 passed |
+| `--workers 1` | 125.4 s | 84.1 s | 36.6 s | 18.8 GB | 11 passed |
+| `--workers 2` | 147.1 s | 96.0, 101.6 s | 45.5 s (8 tests), 24.9 s (3 tests) | 15.1 GB | 11 passed |
+| `--workers 4` | 220.7 s | 144.8 to 172.9 s | 14.6 s (0 tests) to 53.5 s (5 tests) | 8.6 GB | 9 passed, 2 failed |
+
+- **Parallel was not faster here.** The suite takes about 40 s on one device, while each
+  extra worker adds a serial 3.4 GB copy over NFS and a snapshot load from NFS (one load took
+  74 s). Startup dominates, so more workers only add time. Sharding pays off when the suite
+  runs much longer than a worker takes to start, and on a store with fast local clones
+  (APFS on macOS, or a reflink-capable filesystem such as XFS or Btrfs on Linux).
+- **Four workers oversubscribe this host.** Four 2-vCPU guests fill all 8 vCPUs before the
+  emulators' own threads, and two Espresso tests timed out on UI interactions that pass at 1
+  and 2 workers. The run was still reported truthfully: both failures were in `junit.xml` and
+  the failing shards kept `failure.png`. In an earlier 4-worker run one shard's adb stream
+  stopped mid-test; it was reported as `incomplete`, and its log and screenshot collection
+  hit their 30 s limits and were recorded as `collection_errors`.
+- AndroidJUnitRunner splits by test, not by duration: with 4 shards one shard got no tests
+  and another got 5.
+- The union of the test ids in every sharded run's `junit.xml` was the same 11 tests as the
+  serial run. With the APKs built with `-PdorkerDemoFailure`, a 2-worker run failed with
+  exactly `DemoFailureTest#deliberateFailureWhenOptedIn` (exit 7).
+- Results folders take 2.8 MB (1 worker), 4.2 MB (2) and 7.2 MB (4), mostly `logcat.txt`
+  and `failure.png`. Each worker's clone (3.4 GB here) exists only while the worker runs.
+- Not measured on macOS Apple Silicon yet.

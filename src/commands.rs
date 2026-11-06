@@ -285,9 +285,14 @@ pub fn start_in(store: Store, sdk: Sdk, a: &RunArgs, force_cold: bool) -> Result
 
     // Name/port allocation and process spawn happen under one lock so that
     // concurrent `dorker run` invocations cannot collide.
-    let lock = store
-        .lock_create()
-        .map_err(errors::with(errors::CONFLICT))?;
+    // Pool workers queue here behind each other's clones, so they may wait their whole
+    // startup budget.
+    let lock = if a.owner.is_some() {
+        store.lock_create_queued(Duration::from_secs(a.timeout), &|| a.cancelled())
+    } else {
+        store.lock_create()
+    }
+    .map_err(errors::with(errors::CONFLICT))?;
     let id = new_id();
     let name = a
         .name

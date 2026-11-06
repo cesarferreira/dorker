@@ -1,0 +1,78 @@
+# Example GitHub Actions workflow: run the counter app's instrumentation suite in parallel
+# shards on disposable emulators with `dorker test --image`, and keep the reports.
+#
+# Copy it to .github/workflows/ in your own repository and adjust the paths. It needs a
+# Linux x86_64 runner with hardware virtualisation (/dev/kvm): GitHub's hosted Ubuntu
+# runners expose it once the udev rule below is applied; a self-hosted runner needs KVM
+# enabled (and nested virtualisation if it is itself a VM). Without KVM the emulator is
+# far too slow to be useful. Not yet validated end to end on hosted runners.
+name: Android tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  instrumentation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: examples/counter-app
+    env:
+      # Keep the store on the runner's local disk: images are cloned per worker.
+      DORKER_HOME: ${{ runner.temp }}/dorker
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Enable KVM
+        working-directory: .
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install the emulator and the system image
+        run: sdkmanager --install emulator platform-tools "platforms;android-35" "system-images;android-35;google_apis;x86_64"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dorker
+        run: cargo install dorker --locked
+
+      - name: Check the host
+        run: dorker doctor
+
+      - name: Build the app and test APKs
+        run: ./gradlew assembleDebug assembleDebugAndroidTest
+
+      # Images are per host (snapshots depend on the emulator, the system image and the
+      # CPU), so build in the job rather than restoring an image built elsewhere.
+      - name: Build the image
+        run: dorker build -t counter:ci .
+
+      - name: Run the suite in two shards
+        run: |
+          dorker test --image counter:ci --workers 2 \
+            --runner com.dorker.counter.test/androidx.test.runner.AndroidJUnitRunner \
+            --out "$RUNNER_TEMP/results"
+
+      # summary.json, junit.xml and shards/<i>/ (instrument.txt, logcat.txt, emulator.log,
+      # result.json, failure.png) stay readable after the workers are removed.
+      - name: Upload test results
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-results
+          path: ${{ runner.temp }}/results
+          if-no-files-found: warn
