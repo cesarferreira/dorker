@@ -1,0 +1,21 @@
+# cargo-nextest settings (https://nexte.st). Install it with `cargo install cargo-nextest --locked`.
+#
+# nextest runs every test in its own process, so the in-process mutex the fake-SDK tests used to
+# take turns no longer serialises them. Those tests bind real TCP ports (the emulator console
+# ports from 5554) and start stub emulator processes, so they run one at a time, as a group.
+
+[test-groups]
+emulator = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(fake_sdk)'
+test-group = 'emulator'
+
+# `cargo nextest run --profile e2e --run-ignored only` boots real emulators: strictly one at a
+# time (about 3 minutes), and with room for a slow boot.
+[profile.e2e]
+slow-timeout = { period = "120s", terminate-after = 4 }
+
+[[profile.e2e.overrides]]
+filter = 'all()'
+test-group = 'emulator'

@@ -40,5 +40,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       # Emulator-backed tests (`cargo test -- --ignored`) need a booted Android SDK
       # and hardware virtualisation, which hosted runners do not provide.
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
       - name: Test
-        run: cargo test
+        run: cargo nextest run

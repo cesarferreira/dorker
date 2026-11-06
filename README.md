@@ -290,11 +290,13 @@ See [examples/instrumentation](examples/instrumentation) for a runnable example.
 ### Tests
 
 ```bash
-# Unit, CLI and fake-SDK lifecycle/failure tests (no emulator needed)
-cargo test
+# Needs cargo-nextest (cargo install cargo-nextest --locked)
 
-# End-to-end: boots real emulators (about 3 minutes)
-cargo test -- --ignored --test-threads=1
+# Unit, CLI and fake-SDK lifecycle/failure tests (no emulator needed)
+cargo nextest run
+
+# End-to-end: boots real emulators, one at a time (about 3 minutes)
+cargo nextest run --profile e2e --run-ignored only
 ```
 
 ### Use it from AI agents

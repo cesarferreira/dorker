@@ -25,9 +25,13 @@ install-release:
 clean:
 	cargo clean
 
-# Run tests
+# Run tests (needs cargo-nextest: cargo install cargo-nextest --locked)
 test:
-	cargo test
+	cargo nextest run
+
+# End-to-end tests that boot real emulators (about 3 minutes)
+test-e2e:
+	cargo nextest run --profile e2e --run-ignored only
 
 # Run clippy and check
 check:

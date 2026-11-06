@@ -15,7 +15,7 @@ dorker init --template android-auto some/folder
 ## Add a template
 
 Open a pull request that adds a folder `templates/<name>/`. That is all: the next build picks
-it up, and `cargo test` checks it.
+it up, and `cargo nextest run` checks it.
 
 ```
 templates/my-template/
