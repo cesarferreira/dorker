@@ -22,7 +22,8 @@ Any client that takes an `mcpServers` JSON block:
 }
 ```
 
-Set `DORKER_HOME` or `ANDROID_HOME` in the server's `env` if you use non-default locations.
+Set `DORKER_HOME` or `ANDROID_HOME` in the server's `env` if you use non-default locations
+(the server also reads the dorker config file, where `home` and `sdk` can be set).
 The Android SDK (emulator, platform-tools) and a system image must be installed;
 `dorker_doctor` reports what is missing.
 

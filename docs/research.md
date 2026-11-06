@@ -1,6 +1,8 @@
 # Research notes
 
-Status: Phase 0, first milestone. Items marked **unverified** were not confirmed
+Status: Phase 0 research log, kept as a record. Later work answered several of the open
+questions at the end; see `benchmarks.md` and `architecture.md` for the current state.
+Original status: Phase 0, first milestone. Items marked **unverified** were not confirmed
 and must be checked before being relied on.
 
 ## Google `android-emulator-container-scripts`
@@ -198,12 +200,16 @@ downloaded `android-35/google_apis/arm64-v8a` and completed the build (109 s).
 4. **Host memory**: about 2.5 GB (macOS footprint) after a cold boot and 3.3 GB after a restore for a 2 GB guest; `ps` RSS is unreliable on macOS (see `benchmarks.md`).
 5. **Port range** 5554-5680 follows the emulator's console convention.
 6. **Image resolution** only reads installed images; downloading via
-   `sdkmanager` is deferred.
+   `sdkmanager` is deferred. (Later: `dorker pull`, and `build`/`run`, can install a
+   missing image with Google's `android sdk install`, after asking.)
 
 ## Open questions
 
-- Host RAM and idle CPU per instance (needs `dorker bench`).
-- `-gpu host` vs `swiftshader_indirect` boot time and screenshot correctness.
+- Host RAM and idle CPU per instance (needs `dorker bench`). *Answered: `benchmarks.md`.*
+- `-gpu host` vs `swiftshader_indirect` boot time and screenshot correctness. *Answered:
+  `benchmarks.md`; restore time is the same, but `host` uses far less CPU on a Mac, so it is
+  the default there.*
 - Whether `-read-only` AVD sharing could replace per-instance copies.
 - Whether a snapshot is portable across machines (almost certainly not: it
-  embeds host-specific state), which limits any future image registry.
+  embeds host-specific state), which limits any future image registry. *Not tested; the
+  design assumes it is not (see `architecture.md`).*

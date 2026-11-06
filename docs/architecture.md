@@ -8,24 +8,31 @@ itself. One crate, synchronous, no daemon.
 | Module | Responsibility |
 |---|---|
 | `main.rs` | clap CLI surface and dispatch |
-| `commands.rs` | `run`, `start`, `pull`, `ps`, `exec`, `install`, `screenshot`, `logs`, `stop`, `rm`, `images`, `rmi`, `init` |
+| `commands.rs` | `run`, `start`, `pull`, `ps`, `exec`, `install`, `screenshot`, `logs`, `stop` (`--all`, `--orphans`), `rm`, `images`, `rmi`; the pull-on-demand policy |
+| `commit.rs` | `dorker commit`: save a running instance as an image |
+| `config.rs` | the optional config file (`home`, `sdk`, `gpu`, `min_free_mb`) and `dorker config` |
+| `templates.rs` | `dorker templates` / `dorker init --template`; the folders under `templates/` are embedded by the root `build.rs` |
 | `doctor.rs` | host checks with remediation (`--json`) |
-| `sdk.rs` | locate the SDK, list installed system images, resolve `android:<api>[-flavour]` |
-| `store.rs` | instance metadata, lifecycle states, create lock, ids |
+| `sdk.rs` | locate the SDK, list installed and published system images, resolve `android:<api>[-flavour]` |
+| `versions.rs` | `dorker versions` |
+| `store.rs` | instance metadata, lifecycle states, create lock, ids, the store location |
 | `runtime.rs` | AVD materialisation, port allocation, emulator spawn, readiness, signalling, ADB |
 | `dorkerfile.rs` | pure Dorkerfile parser with line/column errors |
-| `build.rs` | `dorker build`: fingerprinting, provisioning, atomic publish, lockfile |
-| `images.rs` | image metadata, tags, size accounting |
-| `testcmd.rs` | `dorker test`: runs `am instrument -r`, parses the status protocol, preserves logs |
+| `build.rs` | `dorker build`: `FETCH`, fingerprinting, provisioning, `PROVISION`, atomic publish, lockfile |
+| `xapk.rs` | install an `.apk` or an `.xapk` bundle (split APKs, OBB files) |
+| `images.rs` | image metadata, tags, size accounting (clone-aware on APFS) |
+| `ls.rs`, `prune.rs` | `dorker ls` (images, instances, storage) and `dorker prune` |
+| `testcmd.rs` | `dorker test`: runs `am instrument -r`, parses the status protocol, keeps logs (`--out` copies them) |
 | `bench.rs` | `dorker bench` |
 | `errors.rs` | stable exit codes |
 | `mcp.rs` | `dorker mcp`: MCP server on stdio; each tool runs the CLI with `--json` |
-| `log.rs` | `-v/--verbose` stderr logging |
+| `style.rs`, `log.rs` | colour rules; `-v/--verbose` stderr logging |
 | `units.rs` | size and image-reference parsing |
 
 ## Decisions
 
-1. **No daemon.** State lives in `~/.dorker` (`$DORKER_HOME`). Each invocation
+1. **No daemon.** State lives in `~/.dorker` (`$DORKER_HOME`, or `home` in the config
+   file; see decision 14). Each invocation
    reconciles persisted state with the OS process table (`runtime::reconcile`),
    so instances survive CLI exit and crashes are detected lazily: an instance
    that should have a process but does not becomes `CRASHED`.
@@ -41,9 +48,13 @@ itself. One crate, synchronous, no daemon.
    and restores the snapshot from the clone. Images are never run directly: a
    failed restore deletes the snapshot it could not load.
 4. **Fingerprint = cache key.** SHA-256 over system image + revision, emulator
-   version, ABI, resources, device, resolution, headless, APK *content* hashes,
-   settings and snapshot name. Identical inputs reuse the image instantly.
-   `Dorkerfile.lock` records the resolved artifacts and warns on drift.
+   version, ABI, resources, device, resolution, headless, GPU mode, `INSTALL` file
+   *content* hashes, `PROVISION` script content hashes, settings and snapshot name.
+   Identical inputs reuse the image instantly. Paths are not part of it, so moving a
+   project does not rebuild. `FETCH` scripts are not either: they only make the
+   `INSTALL` files that are. `Dorkerfile.lock` records the resolved artifacts and
+   warns on drift. Because the GPU mode and the ABI differ per machine, an image is
+   per machine too.
 5. **Synchronous Rust, no Tokio.** The PRD lists Tokio, but every operation is
    spawn-and-poll. Async can be added with the `RuntimeBackend` trait later.
 6. **No `RuntimeBackend` trait yet.** There is one backend. Extracting the trait
@@ -59,11 +70,46 @@ itself. One crate, synchronous, no daemon.
     process group.
 11. **Crash and orphan handling.** A process-expecting record whose process is gone
     becomes `CRASHED`; a `CREATED` record older than 60 s becomes `FAILED`; emulator
-    processes with no record are reported by `dorker ps`. Mutating commands (`stop`, `rm`,
+    processes with no record are reported by `dorker ps`, and `dorker stop --orphans`
+    stops them after asking (they may belong to another store). Mutating commands (`stop`, `rm`,
     `start`) take a per-instance lock (`op.lock`, holder pid inside, stale locks from dead
     processes are broken); `stop` runs `sync` in the guest first so restarts keep data.
 12. **Atomic metadata.** `instance.json` is written to a temp file and renamed.
    A lock file serialises name and port allocation across concurrent runs.
+13. **Host scripts need consent.** `PROVISION` and `FETCH` run arbitrary code on the
+    host while building. `dorker build` / `dorker run` therefore ask first on a
+    terminal and refuse without one unless `--allow-provision` (or
+    `DORKER_ALLOW_PROVISION=1`) is given. The MCP server never passes the flag and
+    removes the variable from the CLI it starts. A cache hit runs nothing, so it asks
+    nothing. Other opt-ins that carry a risk (`--pull`) are likewise flags, never
+    config-file settings, so a global file cannot switch them on for an agent.
+14. **Settings that differ per machine live in a config file** (`config.rs`):
+    `$DORKER_CONFIG`, else `$XDG_CONFIG_HOME/dorker/config.toml`, else
+    `~/.config/dorker/config.toml`. Precedence is flag, then environment variable, then
+    the file, then the built-in default. Unit tests never read it, and the integration
+    tests point `DORKER_CONFIG` at a private path.
+15. **Templates are data.** `templates/<name>/` folders are embedded at build time, so
+    `cargo install` ships them and a contribution is a folder. A test validates every
+    template (metadata, the Dorkerfile parses, scripts are executable).
+
+## Build pipeline
+
+`dorker build` (and `dorker run` with no image) does, in order:
+
+1. Parse the Dorkerfile; if an `INSTALL` file is missing and a `FETCH` script exists,
+   run it (after consent).
+2. Resolve the system image (offering to install it if missing) and hash the inputs into
+   the fingerprint. An image with that id is a cache hit: stop here.
+3. Otherwise ask for consent to run `PROVISION` scripts, then boot a transient build
+   instance that doubles as the workspace.
+4. Install the `INSTALL` files, apply the `SETTING`s, then flush, reboot and verify they
+   persisted (so a cold boot of the image has them).
+5. Run the `PROVISION` scripts against the build emulator, then `sync`. They run after the
+   reboot on purpose: what they start in memory stays running in the snapshot.
+6. Save the snapshot, stop the emulator and publish the AVD home atomically.
+
+The build emulator's steps (boot, each `INSTALL`, settings, persist, each
+`PROVISION`, snapshot) are numbered `[n/N]` in the output.
 
 ## Lifecycle
 
@@ -71,7 +117,7 @@ itself. One crate, synchronous, no daemon.
 CREATED -> STARTING -> BOOTING -> READY -> STOPPING -> STOPPED
               \           \         \________________/
                +-> FAILED  +-> FAILED     any live state -> CRASHED
-STOPPED | FAILED | CRASHED -> STARTING (restart; not exposed by the CLI yet)
+STOPPED | FAILED | CRASHED -> STARTING (`dorker start`: cold boot, data kept)
 ```
 
 Transitions are validated by `State::can_become`.
@@ -86,10 +132,20 @@ Transitions are validated by `State::can_become`.
 ├── instances/<id>/instance.json
 ├── instances/<id>/avd/           an image clone, or a fresh AVD (+ userdata)
 ├── instances/<id>/emulator.log
+├── instances/<id>/test-*/        `dorker test` logs (die with the instance)
+├── images/.<id>.partial/         a build or commit in progress (prune clears)
 └── locks/create.lock
 ```
 
+The store root is `~/.dorker` unless `DORKER_HOME` or the config file's `home` says
+otherwise. Instances are copy-on-write clones of images, so the root must be one
+filesystem.
+
 ## Not implemented yet
 
-Downloads that happen without `dorker pull`, automatic test-APK
-discovery, GPU-mode benchmarking, Linux arm64 and bare-metal validation, release packaging (Phase 5).
+- Automatic test-APK discovery.
+- Moving an image to another machine: a snapshot is host-specific, so there is no
+  `export` / `import`. The recipe (Dorkerfile, `FETCH`, `PROVISION`) is the portable part.
+- Validation on Linux arm64 and bare-metal Linux; Windows is unsupported.
+- MCP progress notifications and cancellation (a build returns only when done).
+- A `RuntimeBackend` trait (there is one backend).
