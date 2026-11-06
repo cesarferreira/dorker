@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.7] - 2026-11-06
+
+### 🚀 Features
+
+- Add the PROVISION directive, and stop --all / --orphans
+- Add project templates (dorker templates, dorker init --template)
+- Add a config file (~/.config/dorker/config.toml) and dorker config
+- Add the FETCH directive; the android-auto templates fetch their own .xapk
+
+### 🐛 Bug Fixes
+
+- PROVISION needs consent before it runs host scripts
+
+### 💼 Other
+
+- Run tests with cargo-nextest, locally and in CI
+
+### 📚 Documentation
+
+- Mention enable-dev-mode.sh in the main README's example list
+- Reorganise the README, fix stale statements, add the Android Auto walkthrough
+- Make the FETCH/PROVISION README example a complete Dorkerfile
+- Bring architecture.md up to date
+- Add a Dorkerfile screenshot under the README badges
 ## [0.1.6] - 2026-11-05
 
 ### 🚀 Features
