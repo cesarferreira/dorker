@@ -1,0 +1,4 @@
+description = "Android Auto with developer mode and the head unit server already on"
+next = "cargo install apkeep           # once"
+next = "./fetch.sh                     # downloads the Android Auto .xapk"
+next = "dorker run -d --name auto      # builds (about 1.5 min), asks before running the script, then runs"

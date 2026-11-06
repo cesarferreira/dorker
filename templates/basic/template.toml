@@ -1,0 +1,4 @@
+description = "A plain Dorkerfile: Android 35, 2 GB, animations off, snapshot"
+next = "dorker doctor"
+next = "dorker run -d --name test      # builds this Dorkerfile and runs it"
+next = "dorker rm -f test"

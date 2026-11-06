@@ -1,0 +1,4 @@
+description = "Android Auto installed from an .xapk (no developer mode set up)"
+next = "cargo install apkeep           # once"
+next = "./fetch.sh                     # downloads the Android Auto .xapk"
+next = "dorker run -d --name auto      # builds this Dorkerfile (about 1 min), then runs it"

@@ -1,0 +1,24 @@
+# Android Auto (Gearhead) on a Google Play image.
+#
+# The app ships as an .xapk bundle: a base APK plus split APKs. dorker installs them
+# together. Download the bundle first with ./fetch.sh (it is not committed).
+#
+# This needs a Play Store image: the plain google_apis image has an Android Auto stub signed
+# with the AOSP test key, which a Google-signed Android Auto cannot replace
+# (INSTALL_FAILED_UPDATE_INCOMPATIBLE). The Play image's stub is Google-signed.
+FROM android:36-playstore
+
+MEMORY 3GB
+CPUS 2
+DISK 6GB
+
+DEVICE pixel_7
+HEADLESS true
+
+INSTALL ./com.google.android.projection.gearhead.xapk
+
+SETTING window_animation_scale 0
+SETTING transition_animation_scale 0
+SETTING animator_duration_scale 0
+
+SNAPSHOT ready

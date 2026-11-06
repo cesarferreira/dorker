@@ -14,6 +14,7 @@ mod runtime;
 mod sdk;
 mod store;
 mod style;
+mod templates;
 mod testcmd;
 #[cfg(test)]
 mod testutil;
@@ -124,8 +125,27 @@ enum Command {
         #[arg(short, long)]
         file: Option<std::path::PathBuf>,
     },
-    /// Create a starter Dorkerfile in the current directory
-    Init,
+    /// Create a Dorkerfile (and helper files) from a template, here or in a folder
+    Init {
+        /// Template to use (default: basic); `dorker templates` lists them
+        #[arg(short, long)]
+        template: Option<String>,
+        /// Folder to create the files in (default: the current directory)
+        dir: Option<std::path::PathBuf>,
+        /// Overwrite files that already exist
+        #[arg(long)]
+        force: bool,
+        /// List the templates and exit
+        #[arg(long)]
+        list: bool,
+    },
+    /// List the project templates, or show what one contains
+    Templates {
+        /// Show this template's files and notes
+        name: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Run a Model Context Protocol server on stdio, so AI agents can drive dorker
     Mcp,
     /// Run instrumentation tests in an instance
@@ -144,6 +164,10 @@ enum Command {
         /// Print the result as JSON on stdout
         #[arg(long)]
         json: bool,
+        /// Also copy the logs (instrument.txt, logcat.txt) to this folder. They are otherwise
+        /// kept inside the instance, which `dorker rm` deletes
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
     },
     /// Measure boot, restore, install and resource numbers for an image
     Bench {
@@ -399,7 +423,22 @@ fn run(cli: Cli) -> Result<i32> {
         }),
         Command::Versions { api, all, json } => versions::run(api, all, json),
         Command::Pull { image, file } => commands::pull(image.as_deref(), file.as_deref()),
-        Command::Init => commands::init(),
+        Command::Init {
+            template,
+            dir,
+            force,
+            list,
+        } => {
+            if list {
+                templates::list(false)
+            } else {
+                templates::init(template.as_deref(), dir.as_deref(), force)
+            }
+        }
+        Command::Templates { name, json } => match name {
+            Some(n) => templates::show(&n, json),
+            None => templates::list(json),
+        },
         Command::Mcp => mcp::serve(),
         Command::Test {
             instance,
@@ -407,7 +446,15 @@ fn run(cli: Cli) -> Result<i32> {
             class,
             timeout,
             json,
-        } => testcmd::run(&instance, &runner, class.as_deref(), timeout, json),
+            out,
+        } => testcmd::run(
+            &instance,
+            &runner,
+            class.as_deref(),
+            timeout,
+            json,
+            out.as_deref(),
+        ),
         Command::Bench {
             image,
             runs,

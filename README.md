@@ -173,7 +173,7 @@ dorker rm -f b1
 `INSTALL` takes an `.apk` or an `.xapk` bundle (split APKs and OBB files), and
 `FROM android:35-playstore` picks the Google Play Store image. Every directive is
 documented in [docs/dorkerfile.md](docs/dorkerfile.md). More examples:
-[examples/basic](examples/basic), [examples/instrumentation](examples/instrumentation), [examples/android-auto](examples/android-auto) (an `.xapk` fetched with apkeep, and `enable-dev-mode.sh`, which turns on Android Auto's developer mode so you can `dorker commit` it) and
+[examples/basic](examples/basic), [examples/instrumentation](examples/instrumentation) and
 [examples/counter-app](examples/counter-app), a real Gradle app with Espresso tests
 (`./dev.sh` runs Gradle, `dorker build`, `run`, a screenshot and the tests). The example APKs
 are not committed: build them with each example's `make-apk.sh` (or Gradle for the counter app).
@@ -202,6 +202,21 @@ copied) and copies it into the image store, so `dorker start setup` still brings
 instance back with its data. A new instance restores the saved snapshot in a few seconds,
 with the app state that was on screen.
 
+### Start from a template
+
+```bash
+dorker templates                          # list them
+dorker templates android-auto-with-dev-mode   # what one contains
+dorker init --template screenshots        # copy it into this folder
+dorker init --template playstore my-app   # ...or into another folder
+```
+
+A template is a Dorkerfile plus any helper scripts. Shipped ones: `basic` (the default),
+`playstore`, `instrumentation-tests`, `screenshots`, `android-auto` (the app from an
+`.xapk`) and `android-auto-with-dev-mode` (also turns on developer mode and starts the head
+unit server). `init` never overwrites existing files unless you pass `--force`. New
+templates are welcome as pull requests: see [docs/templates.md](docs/templates.md).
+
 ### Run a script while building
 
 `PROVISION ./setup.sh` in a Dorkerfile runs a host script once, against the build emulator
@@ -209,7 +224,7 @@ with the app state that was on screen.
 developer mode. The result is cached with the image: an unchanged script is not run again.
 Because it is code on your machine, `dorker build` / `dorker run` ask before running one
 (read it first); in scripts pass `--allow-provision` or set `DORKER_ALLOW_PROVISION=1`.
-See [docs/dorkerfile.md](docs/dorkerfile.md) and [examples/android-auto](examples/android-auto).
+See [docs/dorkerfile.md](docs/dorkerfile.md) and the `android-auto-with-dev-mode` template.
 
 ### Stop everything
 
@@ -256,7 +271,7 @@ leftovers of interrupted builds. A removed image is simply rebuilt the next time
 ### Test, benchmark, automate
 
 ```bash
-dorker init                          # write a starter Dorkerfile
+dorker init                          # starter Dorkerfile (--template X)
 dorker test t1 \
   --runner com.example.test/androidx.test.runner.AndroidJUnitRunner
 dorker test t1 --runner ... --class com.example.FooTest#bar

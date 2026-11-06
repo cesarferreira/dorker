@@ -1,0 +1,19 @@
+# A Google Play image: it has the Play Store app, and its preinstalled Google apps are
+# signed by Google, so real Google builds (for example Android Auto) can update them.
+# The system is not rootable. `dorker versions` lists which Play images exist for your CPU.
+FROM android:36-playstore
+
+MEMORY 3GB
+CPUS 2
+DISK 6GB
+
+DEVICE pixel_7
+HEADLESS true
+
+# INSTALL ./app/build/outputs/apk/debug/app-debug.apk
+
+SETTING window_animation_scale 0
+SETTING transition_animation_scale 0
+SETTING animator_duration_scale 0
+
+SNAPSHOT ready

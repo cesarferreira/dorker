@@ -483,6 +483,145 @@ fn init_creates_a_parseable_dorkerfile_and_never_overwrites() {
     );
 }
 
+#[test]
+fn templates_list_show_and_init() {
+    let e = Env::new("templates");
+
+    // The list names every shipped template; --json is machine-readable.
+    let list = e.cmd(&["templates"]).output().unwrap();
+    assert_eq!(code(&list), 0);
+    let table = text(&list.stdout);
+    for name in [
+        "basic",
+        "android-auto",
+        "playstore",
+        "instrumentation-tests",
+        "screenshots",
+    ] {
+        assert!(table.contains(name), "{name} missing:\n{table}");
+    }
+    let json: serde_json::Value =
+        serde_json::from_slice(&e.cmd(&["templates", "--json"]).output().unwrap().stdout).unwrap();
+    assert!(json.as_array().unwrap().iter().any(|t| {
+        t["name"] == "android-auto-with-dev-mode"
+            && t["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f == "enable-dev-mode.sh")
+    }));
+    // `init --list` is the same list.
+    assert_eq!(
+        text(&e.cmd(&["init", "--list"]).output().unwrap().stdout),
+        table
+    );
+
+    // Showing one: files, steps and the notes.
+    let show = e
+        .cmd(&["templates", "android-auto-with-dev-mode"])
+        .output()
+        .unwrap();
+    let shown = text(&show.stdout);
+    assert!(
+        shown.contains("enable-dev-mode.sh (executable)")
+            && shown.contains("./fetch.sh")
+            && shown.contains("Notes"),
+        "{shown}"
+    );
+
+    // init --template copies the files, keeps scripts executable, and never overwrites.
+    let dir = e.home.join("auto");
+    std::fs::create_dir_all(&dir).unwrap();
+    let o = e
+        .cmd(&["init", "--template", "android-auto-with-dev-mode"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    for f in ["Dorkerfile", "enable-dev-mode.sh", "fetch.sh"] {
+        assert!(dir.join(f).is_file(), "{f}");
+    }
+    assert!(
+        !dir.join("README.md").exists(),
+        "the template README is shown, not copied"
+    );
+    assert!(!dir.join("template.toml").exists());
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |f: &str| std::fs::metadata(dir.join(f)).unwrap().permissions().mode();
+        assert_ne!(mode("enable-dev-mode.sh") & 0o111, 0);
+        assert_eq!(mode("Dorkerfile") & 0o111, 0);
+    }
+    assert!(
+        std::fs::read_to_string(dir.join("Dorkerfile"))
+            .unwrap()
+            .contains("PROVISION ./enable-dev-mode.sh")
+    );
+    let again = e
+        .cmd(&["init", "--template", "android-auto-with-dev-mode"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(code(&again), 8, "refuses to overwrite");
+    assert!(text(&again.stderr).contains("Dorkerfile") && text(&again.stderr).contains("--force"));
+    std::fs::write(dir.join("Dorkerfile"), "mine").unwrap();
+    let forced = e
+        .cmd(&[
+            "init",
+            "--template",
+            "android-auto-with-dev-mode",
+            "--force",
+        ])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(code(&forced), 0);
+    assert!(
+        std::fs::read_to_string(dir.join("Dorkerfile"))
+            .unwrap()
+            .starts_with('#')
+    );
+
+    // The plain android-auto template has no developer-mode script and no PROVISION.
+    let plain = e.home.join("plain");
+    let o = e
+        .cmd(&[
+            "init",
+            "--template",
+            "android-auto",
+            plain.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert!(plain.join("fetch.sh").is_file() && !plain.join("enable-dev-mode.sh").exists());
+    let plain_df = std::fs::read_to_string(plain.join("Dorkerfile")).unwrap();
+    assert!(plain_df.contains("INSTALL ./com.google.android.projection.gearhead.xapk"));
+    assert!(!plain_df.contains("PROVISION"), "{plain_df}");
+
+    // A target folder is created, and an unknown template is a usage error that helps.
+    let target = e.home.join("shots/nested");
+    let o = e
+        .cmd(&[
+            "init",
+            "--template",
+            "screenshots",
+            target.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert!(target.join("screenshots.sh").is_file());
+    let bad = e.cmd(&["init", "--template", "auto"]).output().unwrap();
+    assert_eq!(code(&bad), 2);
+    let err = text(&bad.stderr);
+    assert!(
+        err.contains("Did you mean: android-auto") && err.contains("Available templates"),
+        "{err}"
+    );
+    assert_eq!(code(&e.cmd(&["templates", "nope"]).output().unwrap()), 2);
+}
+
 // ---------- emulator end-to-end (ignored by default) ----------
 
 fn example_apks() -> PathBuf {

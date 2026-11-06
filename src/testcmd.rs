@@ -130,7 +130,14 @@ pub fn report_json(r: &Report, timed_out: bool, logdir: &std::path::Path) -> ser
     })
 }
 
-pub fn run(key: &str, runner: &str, class: Option<&str>, timeout: u64, json: bool) -> Result<i32> {
+pub fn run(
+    key: &str,
+    runner: &str,
+    class: Option<&str>,
+    timeout: u64,
+    json: bool,
+    out: Option<&std::path::Path>,
+) -> Result<i32> {
     let cfg = errors::with(errors::CONFIG);
     if !safe(runner, "") || !runner.contains('/') {
         return Err(cfg(anyhow::anyhow!(
@@ -205,6 +212,21 @@ pub fn run(key: &str, runner: &str, class: Option<&str>, timeout: u64, json: boo
     if let Ok(o) = runtime::adb(&sdk, &serial).args(["logcat", "-d"]).output() {
         let _ = std::fs::write(logdir.join("logcat.txt"), o.stdout);
     }
+    // The logs live inside the instance's folder, so `dorker rm` deletes them. `--out` keeps a
+    // copy somewhere that outlives the instance (for CI artifacts).
+    let mut logdir_shown = logdir.clone();
+    if let Some(dest) = out {
+        std::fs::create_dir_all(dest)
+            .map_err(|e| anyhow::anyhow!("creating --out {}: {e}", dest.display()))?;
+        for name in ["instrument.txt", "logcat.txt"] {
+            if logdir.join(name).is_file() {
+                std::fs::copy(logdir.join(name), dest.join(name))
+                    .map_err(|e| anyhow::anyhow!("copying {name} to {}: {e}", dest.display()))?;
+            }
+        }
+        logdir_shown = dest.to_path_buf();
+    }
+    let logdir = logdir_shown;
 
     // Some failures (e.g. "target has no code") arrive on stderr; parse both.
     let report = parse(&format!("{stdout}{stderr}"));

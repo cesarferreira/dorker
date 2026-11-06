@@ -941,26 +941,6 @@ pub fn install_image(sdk: &Sdk, r: &ImageRef, show_licence_note: bool) -> Result
     Ok(package)
 }
 
-pub fn init() -> Result<i32> {
-    let path = std::path::Path::new("Dorkerfile");
-    if path.exists() {
-        return Err(errors::with(errors::CONFLICT)(anyhow::anyhow!(
-            "Dorkerfile already exists; not overwriting it"
-        )));
-    }
-    std::fs::write(
-        path,
-        "FROM android:35\n\nMEMORY 2GB\nCPUS 2\nDISK 4GB\n\nDEVICE pixel_7\nHEADLESS true\n\n\
-         # INSTALL ./app/build/outputs/apk/debug/app-debug.apk\n\n\
-         SETTING window_animation_scale 0\nSETTING transition_animation_scale 0\nSETTING animator_duration_scale 0\n\n\
-         SNAPSHOT ready\n",
-    )?;
-    println!(
-        "Created Dorkerfile.\n\nNext:\n  dorker doctor\n  dorker run -d --name test      # builds this Dorkerfile and runs it\n  dorker rm -f test\n\nSee docs/dorkerfile.md for every directive."
-    );
-    Ok(0)
-}
-
 pub fn ps(all: bool, json: bool) -> Result<i32> {
     let store = Store::open()?;
     let mut list = store.load_all()?;

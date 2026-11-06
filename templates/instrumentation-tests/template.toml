@@ -1,0 +1,3 @@
+description = "Run a Gradle app's instrumentation (Espresso, AndroidX) tests on a fresh instance"
+next = "Edit the INSTALL paths in the Dorkerfile if your module is not `app`"
+next = "./run-tests.sh com.example.app.test/androidx.test.runner.AndroidJUnitRunner"
