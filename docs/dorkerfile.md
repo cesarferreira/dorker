@@ -70,3 +70,5 @@ A snapshot is only restored when the hardware configuration, system-image
 revision and emulator version match the image. Otherwise `dorker run` prints a
 note and cold boots. Overriding `--memory` or `--cpus` therefore disables the
 snapshot.
+
+Next: [Build and run →](workflows/build-and-run.md)

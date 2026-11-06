@@ -25,6 +25,8 @@
     &nbsp;·&nbsp;
     <a href="#use-it-from-ai-agents">AI agents</a>
     &nbsp;·&nbsp;
+    <a href="https://cesarferreira.github.io/dorker/">Docs</a>
+    &nbsp;·&nbsp;
     <a href="#development">Development</a>
   </p>
 </div>

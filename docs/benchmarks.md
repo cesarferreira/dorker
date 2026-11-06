@@ -217,3 +217,5 @@ is 147 s to 57 s against the NFS store. Four workers are still slower than two.
   that worker runs.
 - Not measured on macOS Apple Silicon yet. The Mac numbers earlier in this file are for
   `dorker bench` (one instance), where an APFS clone of a fresh image was about 20 ms.
+
+Next: [Limitations →](reference/limitations.md)

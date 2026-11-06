@@ -198,3 +198,5 @@ on a local disk of that kind. On NFS or ext4 every instance is a full copy.
 - Validation on Linux arm64 and bare-metal Linux; Windows is unsupported.
 - MCP progress notifications and cancellation (a build returns only when done).
 - A `RuntimeBackend` trait (there is one backend).
+
+Next: [Limitations →](reference/limitations.md)

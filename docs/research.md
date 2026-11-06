@@ -216,3 +216,5 @@ downloaded `android-35/google_apis/arm64-v8a` and completed the build (109 s).
 - Whether a snapshot is portable across machines (almost certainly not: it
   embeds host-specific state), which limits any future image registry. *Not tested; the
   design assumes it is not (see `architecture.md`).*
+
+Next: [Architecture →](architecture.md)

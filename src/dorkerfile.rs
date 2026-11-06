@@ -518,17 +518,24 @@ mod tests {
     /// users can never drift out of sync with the parser.
     #[test]
     fn documented_dorkerfile_examples_parse() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = vec![root.join("README.md")];
+        collect_markdown(&root.join("docs"), &mut files);
         let mut checked = 0;
-        for (name, text) in [
-            ("README.md", include_str!("../README.md")),
-            ("docs/dorkerfile.md", include_str!("../docs/dorkerfile.md")),
-        ] {
-            let mut rest = text;
+        for path in files {
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let name = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            let mut rest = text.as_str();
             while let Some(start) = rest.find("```dorkerfile\n") {
                 let body = &rest[start + "```dorkerfile\n".len()..];
                 let end = body.find("```").expect("unterminated code block");
                 let block = &body[..end];
-                parse(name, block)
+                parse(&name, block)
                     .unwrap_or_else(|e| panic!("{name} example does not parse:\n{block}\n{e}"));
                 checked += 1;
                 rest = &body[end..];
@@ -536,8 +543,23 @@ mod tests {
         }
         assert!(
             checked >= 2,
-            "expected examples in the README and dorkerfile.md, found {checked}"
+            "expected examples in the README and docs, found {checked}"
         );
+    }
+
+    fn collect_markdown(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+            .map(|entry| entry.expect("dir entry").path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                collect_markdown(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "md") {
+                out.push(path);
+            }
+        }
     }
 
     #[test]

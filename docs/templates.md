@@ -2,7 +2,7 @@
 
 A template is a folder of starter files for a project: a `Dorkerfile` plus whatever helper
 scripts it needs. `dorker init --template <name>` copies one into a folder, and
-`dorker templates` lists them. They live in [`templates/`](../templates) and are built into
+`dorker templates` lists them. They live in [`templates/`](https://github.com/cesarferreira/dorker/tree/main/templates) and are built into
 the binary, so they work after a plain `cargo install dorker`.
 
 ```bash
@@ -49,3 +49,5 @@ If a template needs a script on the host, use `PROVISION` (runs against the buil
 or `FETCH` (creates an `INSTALL` file that is missing, for example by downloading it) in the
 Dorkerfile. `dorker` asks the user before running either, and the MCP server refuses them.
 `android-auto` uses `FETCH ./fetch.sh` so that `dorker run` is the only command needed.
+
+Next: [Build and run →](workflows/build-and-run.md)

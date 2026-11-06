@@ -83,3 +83,5 @@ The server runs with your user's privileges and is meant for local, trusted agen
   downscale; dorker does not.
 - There is no cancellation of an in-flight tool call yet.
 - Tools do not stream progress. `dorker_build` and a cold `dorker_run` return only when done.
+
+Next: [Configuration →](configuration/index.md)

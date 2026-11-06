@@ -1,0 +1,76 @@
+site_name: dorker
+site_description: Docker for headless Android emulator environments.
+site_url: https://cesarferreira.github.io/dorker/
+repo_url: https://github.com/cesarferreira/dorker
+repo_name: cesarferreira/dorker
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - toc.integrate
+    - content.code.copy
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Install: getting-started/install.md
+      - Quick Start: getting-started/quick-start.md
+  - Concepts:
+      - Images and Instances: concepts/images-and-instances.md
+  - Dorkerfile: dorkerfile.md
+  - Commands:
+      - Core Commands: commands/core.md
+  - Workflows:
+      - Build and Run: workflows/build-and-run.md
+      - Templates: templates.md
+      - Testing: workflows/testing.md
+      - Disk and Cleanup: workflows/disk.md
+      - AI Agents: mcp.md
+  - Configuration:
+      - Config Reference: configuration/index.md
+  - Reference:
+      - Architecture: architecture.md
+      - Benchmarks: benchmarks.md
+      - Limitations: reference/limitations.md
+      - Development: reference/development.md
+      - Research Notes: research.md
