@@ -26,10 +26,6 @@
 //! on the host, see docs/benchmarks.md), not a guarantee against running out of memory.
 //! Already running instances are not subtracted again: the host's available memory and free
 //! disk already reflect them.
-
-// No command uses the pool yet.
-#![allow(dead_code)]
-
 use crate::commands::{self, OP_TIMEOUT, RunArgs, Started};
 use crate::errors;
 use crate::images::{self, ImageMeta};
@@ -483,7 +479,6 @@ pub struct PoolSpec {
 /// Progress of a pool, for the caller to present. Never printed on stdout by the pool.
 #[derive(Debug)]
 pub enum Event<'a> {
-    Warning(&'a str),
     Starting {
         worker: u32,
     },
@@ -510,8 +505,6 @@ pub enum Event<'a> {
 pub struct ReadyWorker {
     pub index: u32,
     pub started: Started,
-    /// Queue + boot time.
-    pub startup_secs: f64,
 }
 
 pub enum Outcome<T> {
@@ -590,6 +583,25 @@ impl Pool {
             )));
         }
         let image = images::find(&store, &spec.image).map_err(cfg)?;
+        // Resolved once here, so that N workers never try to install it at the same time.
+        if sdk.find_package(&image.system_image).is_none() {
+            let missing = anyhow::anyhow!(
+                "image {} needs {} which is not installed\n\nInstall it with:\n  android sdk install \"{}\"\nor re-run with --pull.",
+                image.id,
+                image.system_image,
+                image.system_image
+            );
+            if !spec.pull {
+                return Err(errors::with(errors::DEPENDENCY)(missing));
+            }
+            commands::ensure_package(
+                &sdk,
+                &image.system_image,
+                commands::PullPolicy::Always,
+                missing,
+            )
+            .map_err(errors::with(errors::DEPENDENCY))?;
+        }
         let cost = WorkerCost::for_image(&store, &image);
         let mut notes = reclaim_stale(&store, &sdk);
 
@@ -641,10 +653,6 @@ impl Pool {
 
     pub fn store(&self) -> &Store {
         &self.store
-    }
-
-    pub fn sdk(&self) -> &Sdk {
-        &self.sdk
     }
 
     /// Cancel everything: pending starts and running work.
@@ -755,6 +763,7 @@ impl Pool {
                 worker: index,
             }),
             cancel: Some(self.stop_starts.clone()),
+            quiet: true,
         };
         let store = match Store::at(self.store.root()) {
             Ok(s) => s,
@@ -794,11 +803,7 @@ impl Pool {
             events(&Event::Cancelled { worker: index });
             return result(Outcome::Cancelled { inst: Some(inst) });
         }
-        let ready = ReadyWorker {
-            index,
-            started,
-            startup_secs,
-        };
+        let ready = ReadyWorker { index, started };
         let value = work(&ready, &|| self.cancelled());
         let ReadyWorker { started, .. } = ready;
         self.teardown(index, &started.inst.id, events);
@@ -1366,6 +1371,7 @@ mod tests {
                 logs: false,
                 owner: None,
                 cancel: None,
+                quiet: true,
             },
             false,
         )
@@ -1564,7 +1570,7 @@ mod tests {
                 f.live_emulators().is_empty(),
                 "the emulator itself was stopped"
             );
-            remove_owned(p.store(), p.sdk(), &report.survivors[0].0).unwrap();
+            remove_owned(p.store(), &p.sdk, &report.survivors[0].0).unwrap();
         }
         assert!(f.store().load_all().unwrap().is_empty());
     }

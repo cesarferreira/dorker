@@ -23,6 +23,7 @@ itself. One crate, synchronous, no daemon.
 | `images.rs` | image metadata, tags, size accounting (clone-aware on APFS) |
 | `ls.rs`, `prune.rs` | `dorker ls` (images, instances, storage) and `dorker prune` |
 | `testcmd.rs` | `dorker test`: runs `am instrument -r`, parses the status protocol, keeps logs (`--out` copies them) |
+| `testrun.rs` | `dorker test --image`: one shard per pool worker, the aggregate verdict, `summary.json` |
 | `pool.rs` | worker pools: run ownership, resource admission, bounded parallel startup, cancellation and cleanup of a group of disposable instances |
 | `bench.rs` | `dorker bench` |
 | `errors.rs` | stable exit codes |
@@ -112,6 +113,16 @@ itself. One crate, synchronous, no daemon.
     read and written under `locks/pool.lock`. It cannot guarantee the host never runs out of
     memory. Clones still happen under `create.lock`, so on filesystems without reflinks the
     workers' copy phase is serial.
+18. **Sharded tests are strict** (`testrun.rs`). `dorker test --image` runs shard `i` of `N`
+    on pool worker `i`, with the same runner and `--class` for every shard, and relies on
+    AndroidJUnitRunner's `numShards`/`shardIndex` to split the suite. Workers are not
+    reused, so there is no dynamic work queue. A shard counts only if its output reached
+    the runner's final `INSTRUMENTATION_CODE: -1`; a missing final code, a crash, a
+    timeout or a runner that did not start make the run incomplete, and a test reported by
+    two shards (the runner ignored the shard arguments) fails it. Exit-code precedence:
+    interrupt (130), startup failure (5), adb failure (6), incomplete or duplicated or
+    failed or empty (7), cleanup failure (1), pass (0). `summary.json` is written once with
+    cleanup pending and rewritten after cleanup, both atomically.
 
 ## Build pipeline
 

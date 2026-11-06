@@ -376,6 +376,30 @@ instrumentation output and logcat inside the instance, which `dorker rm` deletes
 `--out test-results` to copy them somewhere that survives (for CI artifacts).
 See [examples/instrumentation](examples/instrumentation) for a runnable example.
 
+#### Shard a suite across disposable emulators
+
+```bash
+dorker test --image myapp:ci --workers 4 \
+  --runner com.example.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+With `--image`, dorker starts `--workers` fresh instances of a built image (APKs installed
+by the Dorkerfile), runs shard `i` of `N` on worker `i` with AndroidJUnitRunner's
+`-e numShards N -e shardIndex i`, and removes every worker it started, also on failure,
+Ctrl-C or `SIGTERM`. It never touches instances it did not start. Before starting, it
+checks memory, disk and free ports for all workers and refuses with exit 8 (and how many
+workers would fit) if they do not fit; `DORKER_HOST_RESERVE_MB` (default 2048) is the
+memory it leaves for the host.
+
+The run passes only if every shard ran to its final result, nothing failed, at least one
+test ran, no test was reported by two shards (a runner that ignores the shard arguments)
+and cleanup succeeded. A worker that fails to start exits 5, an interrupt exits 130, any
+other broken run exits 7. Results go to `~/.dorker/results/<run-id>/` (or
+`--out <dir>/<run-id>/`): `summary.json` (schema `dorker.test-run/1`, also printed by
+`--json`) and `shards/<i>/` with `instrument.txt` and `logcat.txt`. `--class` applies to
+every shard; `--startup-timeout` (default 300s) bounds each worker's boot and `--timeout`
+each shard's tests. Android Test Orchestrator is not supported in this mode.
+
 ### Use it from AI agents
 
 `dorker mcp` is a Model Context Protocol server: an agent can start instances, install apps,
@@ -412,8 +436,9 @@ transitions and timings. Each instance also keeps its raw emulator output in
 | 4 | image build failed |
 | 5 | instance failed to start or boot |
 | 6 | adb operation failed |
-| 7 | instrumentation tests failed |
-| 8 | name, port or build conflict, or not enough free disk space |
+| 7 | instrumentation tests failed, or a sharded run was incomplete |
+| 8 | name, port or build conflict, not enough free disk space, or not enough capacity for `--workers` |
+| 130 | `dorker test --image` was interrupted (its workers are removed) |
 
 `dorker exec` returns the guest command's own exit status.
 

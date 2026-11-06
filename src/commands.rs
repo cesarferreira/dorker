@@ -32,6 +32,8 @@ pub struct RunArgs {
     pub owner: Option<RunOwner>,
     /// Abandons the start (like Ctrl-C) when set; a pool cancels its pending starts with it.
     pub cancel: Option<Arc<AtomicBool>>,
+    /// No progress lines on stderr (warnings are still printed); a pool reports its own.
+    pub quiet: bool,
 }
 
 impl RunArgs {
@@ -358,16 +360,18 @@ pub fn start_in(store: Store, sdk: Sdk, a: &RunArgs, force_cold: bool) -> Result
         return Err(errors::with(errors::STARTUP)(e));
     }
 
-    eprintln!(
-        "Starting {} ({}, API {} {}, {}MB, {} cpus) on {}",
-        inst.name,
-        inst.id,
-        inst.api,
-        inst.flavour,
-        inst.memory_mb,
-        inst.cpus,
-        inst.serial()
-    );
+    if !a.quiet {
+        eprintln!(
+            "Starting {} ({}, API {} {}, {}MB, {} cpus) on {}",
+            inst.name,
+            inst.id,
+            inst.api,
+            inst.flavour,
+            inst.memory_mb,
+            inst.cpus,
+            inst.serial()
+        );
+    }
     let t0 = std::time::Instant::now();
     let wait = |store: &Store, inst: &mut Instance| {
         runtime::wait_ready(
@@ -376,13 +380,20 @@ pub fn start_in(store: Store, sdk: Sdk, a: &RunArgs, force_cold: bool) -> Result
             inst,
             Duration::from_secs(a.timeout),
             || a.cancelled(),
-            || eprintln!("  Android is booting..."),
+            || {
+                if !a.quiet {
+                    eprintln!("  Android is booting...")
+                }
+            },
         )
     };
     let mut ready = wait(&store, &mut inst);
     if ready.is_err() && matches!(boot, BootMode::Restore(_)) && !a.cancelled() {
         // A corrupt or unloadable snapshot must not make the image unusable.
-        eprintln!("warning: snapshot restore failed; falling back to a cold boot");
+        eprintln!(
+            "warning: snapshot restore failed for {}; falling back to a cold boot",
+            inst.name
+        );
         let retry = (|| -> Result<()> {
             inst.set_state(State::Starting)?;
             inst.snapshot = None;
@@ -407,14 +418,16 @@ pub fn start_in(store: Store, sdk: Sdk, a: &RunArgs, force_cold: bool) -> Result
     }
     let ready_secs = t0.elapsed().as_secs_f64();
     let restored = runtime::restored_from_snapshot(&store, &inst);
-    eprintln!(
-        "Ready in {ready_secs:.1}s ({})",
-        if restored {
-            "snapshot restore"
-        } else {
-            "cold boot"
-        }
-    );
+    if !a.quiet {
+        eprintln!(
+            "Ready in {ready_secs:.1}s ({})",
+            if restored {
+                "snapshot restore"
+            } else {
+                "cold boot"
+            }
+        );
+    }
     Ok(Started {
         sdk,
         store,

@@ -55,6 +55,7 @@ case "$1" in
       "pm path android") echo "package:/system/framework/framework-res.apk" ;;
       sync) ;;
       "sh -c 'exit 7'") exit 7 ;;
+      "am instrument "*) if [ -n "$FAKE_INSTRUMENT" ]; then exec "$FAKE_INSTRUMENT" "$serial" "$*"; fi; echo "fake: $*" ;;
       *) echo "fake: $*" ;;
     esac ;;
   emu)
@@ -152,7 +153,8 @@ impl Fake {
             .env_remove("FAKE_NOT_BOOTING")
             .env_remove("FAKE_BLANK")
             .env_remove("FAKE_BLANK_FILE")
-            .env_remove("FAKE_LIST_FILE");
+            .env_remove("FAKE_LIST_FILE")
+            .env_remove("FAKE_INSTRUMENT");
         c
     }
 
@@ -2109,4 +2111,448 @@ fn fetch_scripts_run_only_when_an_install_file_is_missing() {
         "{}",
         text(&not_exec.stderr)
     );
+}
+
+// ---------- dorker test --image: sharded runs on disposable workers ----------
+
+/// Stands in for `am instrument` and splits `$FAKE_TESTS` ("Class#method" words) the way
+/// AndroidJUnitRunner does with numShards/shardIndex. Knobs pick a misbehaving shard.
+const INSTRUMENT: &str = r#"#!/bin/sh
+serial=$1
+echo "$serial $2" >> "$FAKE_PIDDIR/instrument.log"
+set -- $2
+n=1; i=0; filter=; runner=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -e) case "$2" in numShards) n=$3 ;; shardIndex) i=$3 ;; class) filter=$3 ;; esac; shift 3 ;;
+    *) runner=$1; shift ;;
+  esac
+done
+case "$runner" in *nope*)
+  echo "INSTRUMENTATION_STATUS: Error=Unable to find instrumentation info for: ComponentInfo{$runner}"
+  echo "INSTRUMENTATION_STATUS_CODE: -1"
+  echo "android.util.AndroidException: INSTRUMENTATION_FAILED: $runner"
+  exit 1 ;;
+esac
+[ "$FAKE_HANG_SHARD" = "$i" ] && sleep 30 </dev/null >/dev/null 2>&1
+k=0
+for t in $FAKE_TESTS; do
+  class=${t%%#*}; name=${t#*#}
+  if [ -n "$filter" ]; then
+    case ",$filter," in *",$t,"*|*",$class,"*) ;; *) continue ;; esac
+  fi
+  if [ -n "$FAKE_IGNORE_SHARDS" ] || [ $((k % n)) -eq "$i" ]; then
+    echo "INSTRUMENTATION_STATUS: class=$class"
+    echo "INSTRUMENTATION_STATUS: test=$name"
+    echo "INSTRUMENTATION_STATUS_CODE: 1"
+    echo "INSTRUMENTATION_STATUS: class=$class"
+    echo "INSTRUMENTATION_STATUS: test=$name"
+    case " $FAKE_FAIL " in
+      *" $t "*) echo "INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: boom in $name"; echo "INSTRUMENTATION_STATUS_CODE: -2" ;;
+      *) echo "INSTRUMENTATION_STATUS_CODE: 0" ;;
+    esac
+  fi
+  k=$((k + 1))
+done
+if [ "$FAKE_CRASH_SHARD" = "$i" ]; then
+  echo "INSTRUMENTATION_RESULT: shortMsg=Process crashed."
+  echo "INSTRUMENTATION_CODE: 0"
+  exit 0
+fi
+[ "$FAKE_NOFINAL_SHARD" = "$i" ] && exit 0
+echo "INSTRUMENTATION_RESULT: stream="
+echo "INSTRUMENTATION_CODE: -1"
+"#;
+
+const RUNNER: &str = "com.x.test/androidx.test.runner.AndroidJUnitRunner";
+const SUITE: &str = "a.A#one a.A#two a.B#three a.B#four a.C#five";
+
+/// A fake SDK with a built `suite:1` image (1 GB guests, so small hosts admit a few) and the
+/// instrumentation stub installed.
+fn suite_fake(name: &str) -> Fake {
+    let f = Fake::new(name, true);
+    build_image(&f, name, "MEMORY 1GB\n", Some("suite:1"));
+    write_exec(&f.root.join("instrument.sh"), INSTRUMENT);
+    f
+}
+
+impl Fake {
+    fn image_test(&self, workers: &str, extra: &[&str]) -> Command {
+        let out = self.root.join("results");
+        let mut args = vec![
+            "test",
+            "--image",
+            "suite:1",
+            "--workers",
+            workers,
+            "--json",
+            "--out",
+            out.to_str().unwrap(),
+        ];
+        if !extra.contains(&"--runner") {
+            args.extend(["--runner", RUNNER]);
+        }
+        args.extend_from_slice(extra);
+        let mut c = self.cmd(&args);
+        c.env("FAKE_INSTRUMENT", self.root.join("instrument.sh"))
+            .env("FAKE_TESTS", SUITE)
+            .env("DORKER_HOST_RESERVE_MB", "0")
+            .env_remove("FAKE_FAIL")
+            .env_remove("FAKE_HANG_SHARD")
+            .env_remove("FAKE_CRASH_SHARD")
+            .env_remove("FAKE_NOFINAL_SHARD")
+            .env_remove("FAKE_IGNORE_SHARDS");
+        c
+    }
+
+    /// `am instrument` invocations since the last call, as (serial, command).
+    fn take_instrument_log(&self) -> Vec<(String, String)> {
+        let path = self.piddir.join("instrument.log");
+        let log = std::fs::read_to_string(&path).unwrap_or_default();
+        let _ = std::fs::remove_file(&path);
+        log.lines()
+            .map(|l| {
+                let (s, c) = l.split_once(' ').unwrap();
+                (s.to_string(), c.to_string())
+            })
+            .collect()
+    }
+
+    /// Nothing a run started may outlive it: no workers, no emulators, no run manifests.
+    fn assert_nothing_left(&self) {
+        wait_until("worker emulators to exit", || {
+            self.live_emulators().is_empty()
+        });
+        assert!(ps_json(self).is_empty(), "{:?}", ps_json(self));
+        let runs = self.home.join("runs");
+        let left = std::fs::read_dir(&runs).map_or(0, |d| d.count());
+        assert_eq!(left, 0, "run manifests left in {}", runs.display());
+    }
+}
+
+fn summary(o: &Output) -> serde_json::Value {
+    serde_json::from_slice(&o.stdout)
+        .unwrap_or_else(|e| panic!("{e}: stdout={} stderr={}", text(&o.stdout), text(&o.stderr)))
+}
+
+#[test]
+fn image_mode_shards_the_suite_across_disposable_workers() {
+    let _guard = serial();
+    let f = suite_fake("shards");
+    let out = f.image_test("2", &[]).output().unwrap();
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let s = summary(&out);
+    assert_eq!(s["schema"], "dorker.test-run/1");
+    assert_eq!(s["verdict"], "passed");
+    assert_eq!(s["ok"], true);
+    assert_eq!(s["passed"], 5);
+    assert_eq!(s["shards"]["requested"], 2);
+    assert_eq!(s["shards"]["completed"], 2);
+    assert_eq!(s["cleanup"]["status"], "ok", "{s}");
+
+    // One sharded invocation per worker: distinct indices, the same count, each on its own
+    // worker's serial; never an unsharded run of the whole suite.
+    let calls = f.take_instrument_log();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    let workers = s["workers"].as_array().unwrap();
+    for (i, w) in workers.iter().enumerate() {
+        assert_eq!(w["shard"], i);
+        assert_eq!(w["status"], "passed");
+        let serial = w["serial"].as_str().unwrap();
+        let call = calls
+            .iter()
+            .find(|(s, _)| s == serial)
+            .unwrap_or_else(|| panic!("no instrumentation on {serial}: {calls:?}"));
+        assert!(
+            call.1
+                .contains(&format!("-e numShards 2 -e shardIndex {i} ")),
+            "{call:?}"
+        );
+        assert!(call.1.ends_with(RUNNER), "{call:?}");
+        let dir = PathBuf::from(w["dir"].as_str().unwrap());
+        assert!(dir.join("instrument.txt").is_file());
+        assert!(dir.join("logcat.txt").is_file());
+    }
+    assert_ne!(workers[0]["serial"], workers[1]["serial"]);
+    assert_eq!(
+        workers[0]["passed"].as_u64().unwrap() + workers[1]["passed"].as_u64().unwrap(),
+        5
+    );
+
+    // The summary on stdout is the one saved with the results.
+    let dir = PathBuf::from(s["results_dir"].as_str().unwrap());
+    assert!(dir.starts_with(f.root.join("results")), "{}", dir.display());
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("summary.json")).unwrap()).unwrap();
+    assert_eq!(saved, s);
+    f.assert_nothing_left();
+
+    // A class filter is passed unchanged to every shard.
+    let out = f.image_test("2", &["--class", "a.A"]).output().unwrap();
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(summary(&out)["passed"], 2);
+    let calls = f.take_instrument_log();
+    assert_eq!(calls.len(), 2);
+    assert!(
+        calls.iter().all(|(_, c)| c.contains(" -e class a.A ")),
+        "{calls:?}"
+    );
+    f.assert_nothing_left();
+
+    // A single worker still runs as shard 0 of 1 and gets the whole suite.
+    let out = f.image_test("1", &[]).output().unwrap();
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(summary(&out)["passed"], 5);
+    f.assert_nothing_left();
+}
+
+#[test]
+fn image_mode_never_reports_a_broken_run_as_a_pass() {
+    let _guard = serial();
+    let f = suite_fake("verdicts");
+    let check = |env: &[(&str, &str)], extra: &[&str], verdict: &str, shard_status: &str| {
+        let mut c = f.image_test("2", extra);
+        for (k, v) in env {
+            c.env(k, v);
+        }
+        let out = c.output().unwrap();
+        let s = summary(&out);
+        assert_eq!(code(&out), 7, "{env:?}: {}", text(&out.stderr));
+        assert_eq!(s["verdict"], verdict, "{env:?}: {s}");
+        assert_eq!(s["ok"], false);
+        if !shard_status.is_empty() {
+            let statuses: Vec<_> = s["workers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|w| w["status"].as_str().unwrap().to_string())
+                .collect();
+            assert!(
+                statuses.iter().any(|st| st == shard_status),
+                "{env:?}: {statuses:?}"
+            );
+        }
+        f.take_instrument_log();
+        f.assert_nothing_left();
+        s
+    };
+
+    let s = check(&[("FAKE_FAIL", "a.B#three")], &[], "failed", "failed");
+    assert_eq!(s["failed"], 1);
+    assert_eq!(s["passed"], 4);
+    assert_eq!(s["failures"][0]["test"], "three");
+    assert_eq!(s["failures"][0]["shard"], 0);
+    assert!(
+        s["failures"][0]["stack"]
+            .as_str()
+            .unwrap()
+            .contains("AssertionError")
+    );
+
+    check(
+        &[("FAKE_CRASH_SHARD", "1")],
+        &[],
+        "incomplete",
+        "runner_error",
+    );
+    check(
+        &[("FAKE_NOFINAL_SHARD", "0")],
+        &[],
+        "incomplete",
+        "incomplete",
+    );
+    check(
+        &[("FAKE_HANG_SHARD", "1")],
+        &["--timeout", "2"],
+        "incomplete",
+        "timed_out",
+    );
+    let s = check(
+        &[],
+        &["--runner", "com.nope/X"],
+        "incomplete",
+        "not_started",
+    );
+    assert!(
+        s["workers"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Unable to find instrumentation info"),
+        "{s}"
+    );
+    // A runner that ignores the shard arguments runs every test on every worker.
+    let s = check(&[("FAKE_IGNORE_SHARDS", "1")], &[], "duplicate_tests", "");
+    assert_eq!(s["duplicates"].as_array().unwrap().len(), 5, "{s}");
+    // Zero tests across every shard is not a pass.
+    check(&[("FAKE_TESTS", "")], &[], "empty", "");
+    // Empty shards are fine when another shard ran tests.
+    let out = f
+        .image_test("3", &[])
+        .env("FAKE_TESTS", "a.A#one")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(summary(&out)["passed"], 1);
+    f.assert_nothing_left();
+}
+
+#[test]
+fn image_mode_startup_failures_and_bad_arguments() {
+    let _guard = serial();
+    let f = suite_fake("image-errors");
+
+    let out = f
+        .image_test("2", &[])
+        .env("FAKE_EMU_CRASH", "1")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 5, "{}", text(&out.stderr));
+    let s = summary(&out);
+    assert_eq!(s["verdict"], "startup_failed");
+    assert_eq!(s["workers"][0]["status"], "startup_failed");
+    let log = PathBuf::from(s["workers"][0]["dir"].as_str().unwrap()).join("emulator.log");
+    assert!(
+        std::fs::read_to_string(&log)
+            .unwrap()
+            .contains("fake emulator crashed: boom"),
+        "{}",
+        log.display()
+    );
+    assert!(
+        f.take_instrument_log().is_empty(),
+        "no tests on a failed pool"
+    );
+    f.assert_nothing_left();
+
+    // Not enough room is refused before anything starts.
+    let out = f
+        .image_test("2", &[])
+        .env("DORKER_HOST_RESERVE_MB", "100000000")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 8, "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("DORKER_HOST_RESERVE_MB"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert!(f.live_emulators().is_empty());
+    f.assert_nothing_left();
+
+    for (args, needle) in [
+        (
+            vec![
+                "test",
+                "--image",
+                "suite:1",
+                "--workers",
+                "0",
+                "--runner",
+                RUNNER,
+            ],
+            "0",
+        ),
+        (
+            vec!["test", "--workers", "2", "--runner", RUNNER],
+            "--image",
+        ),
+        (
+            vec!["test", "one", "--image", "suite:1", "--runner", RUNNER],
+            "--image",
+        ),
+        (vec!["test", "--runner", RUNNER], "<INSTANCE>"),
+        (
+            vec!["test", "--image", "android:35", "--runner", RUNNER],
+            "built image",
+        ),
+        (
+            vec!["test", "--image", "nope:1", "--runner", RUNNER],
+            "nope:1",
+        ),
+        (
+            vec![
+                "test",
+                "--image",
+                "suite:1",
+                "--runner",
+                "androidx.test.orchestrator/.AndroidTestOrchestrator",
+            ],
+            "Orchestrator",
+        ),
+    ] {
+        let out = f.run(&args);
+        assert_eq!(code(&out), 2, "{args:?}: {}", text(&out.stderr));
+        assert!(
+            text(&out.stderr).contains(needle),
+            "{args:?}: {}",
+            text(&out.stderr)
+        );
+    }
+    f.assert_nothing_left();
+}
+
+#[test]
+fn image_mode_interrupts_remove_every_worker() {
+    let _guard = serial();
+    let f = suite_fake("interrupt");
+    for signal in ["-INT", "-TERM"] {
+        let child = f
+            .image_test("2", &[])
+            .env("FAKE_HANG_SHARD", "0")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let log = f.piddir.join("instrument.log");
+        wait_until("both shards to start", || {
+            std::fs::read_to_string(&log).is_ok_and(|l| l.lines().count() == 2)
+        });
+        let _ = Command::new("kill")
+            .args([signal, &child.id().to_string()])
+            .status();
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(code(&out), 130, "{signal}: {}", text(&out.stderr));
+        assert_eq!(summary(&out)["verdict"], "cancelled");
+        f.take_instrument_log();
+        f.assert_nothing_left();
+    }
+}
+
+#[test]
+fn instance_mode_test_output_is_unchanged() {
+    let _guard = serial();
+    let f = suite_fake("instance-mode");
+    assert_eq!(code(&f.run(&["run", "-d", "--name", "one", "suite:1"])), 0);
+    let out = f
+        .cmd(&["test", "one", "--runner", RUNNER, "--json"])
+        .env("FAKE_INSTRUMENT", f.root.join("instrument.sh"))
+        .env("FAKE_TESTS", SUITE)
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "crashed",
+            "errors",
+            "failed",
+            "failed_to_start",
+            "failures",
+            "ignored",
+            "log_dir",
+            "ok",
+            "passed",
+            "timed_out"
+        ]
+    );
+    assert_eq!(v["passed"], 5);
+    let calls = f.take_instrument_log();
+    assert_eq!(calls.len(), 1);
+    assert!(!calls[0].1.contains("numShards"), "{calls:?}");
+    // The instance is the caller's: it keeps running.
+    assert_eq!(ps_json(&f)[0]["status"], "READY");
+    assert_eq!(code(&f.run(&["rm", "-f", "one"])), 0);
 }

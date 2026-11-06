@@ -352,6 +352,7 @@ pub fn run(a: BenchArgs) -> Result<i32> {
         logs: false,
         owner: None,
         cancel: None,
+        quiet: false,
     };
     let mut cold = Vec::new();
     let mut restore = Vec::new();

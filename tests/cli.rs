@@ -860,6 +860,61 @@ fn end_to_end_build_run_exec_screenshot_test_cleanup() {
 
 #[test]
 #[ignore = "boots real emulators; run with --ignored"]
+fn sharded_image_test_on_two_disposable_workers() {
+    let e = Env::new("e2e-shards");
+    let ctx = example_apks();
+    let b = e.run(&["build", "-t", "e2e:shards", ctx.to_str().unwrap()]);
+    assert_eq!(code(&b), 0, "{}", text(&b.stderr));
+    let runner = "com.dorker.sample.test/com.dorker.sample.SampleRunner";
+    let image_test = |extra: &[&str]| {
+        let mut args = vec![
+            "test",
+            "--image",
+            "e2e:shards",
+            "--workers",
+            "2",
+            "--runner",
+            runner,
+            "--json",
+        ];
+        args.extend_from_slice(extra);
+        let o = e.run(&args);
+        let v: serde_json::Value = serde_json::from_slice(&o.stdout)
+            .unwrap_or_else(|err| panic!("{err}: {}", text(&o.stderr)));
+        (code(&o), v)
+    };
+
+    // The suite is split across two emulators; the planted failure fails the run. A marker
+    // written by one shard is never seen by the other, so userdata is not shared.
+    let (c, s) = image_test(&[]);
+    assert_eq!(c, 7, "{s}");
+    assert_eq!(s["verdict"], "failed", "{s}");
+    assert_eq!(
+        (s["passed"].as_u64(), s["failed"].as_u64()),
+        (Some(2), Some(1)),
+        "{s}"
+    );
+    assert_eq!(s["shards"]["completed"], 2);
+    assert_eq!(s["failures"][0]["test"], "failing");
+    let w = s["workers"].as_array().unwrap();
+    assert_ne!(w[0]["serial"], w[1]["serial"]);
+    assert!(w.iter().all(|w| w["boot"] == "snapshot"), "{s}");
+    let dir = PathBuf::from(s["results_dir"].as_str().unwrap());
+    assert!(dir.join("summary.json").is_file());
+    assert!(dir.join("shards/1/logcat.txt").is_file());
+
+    // A passing selection exits 0 even though the second shard has nothing to run.
+    let (c, s) = image_test(&["--class", "com.dorker.sample.SampleTests#passing"]);
+    assert_eq!(c, 0, "{s}");
+    assert_eq!(s["passed"], 1);
+
+    // Nothing outlives the runs.
+    assert_eq!(text(&e.run(&["ps", "-a", "--json"]).stdout).trim(), "[]");
+    assert_eq!(std::fs::read_dir(e.home.join("runs")).unwrap().count(), 0);
+}
+
+#[test]
+#[ignore = "boots real emulators; run with --ignored"]
 fn failed_build_leaves_nothing_behind() {
     let e = Env::new("badbuild");
     let ctx = e.home.join("ctx");

@@ -18,6 +18,7 @@ mod store;
 mod style;
 mod templates;
 mod testcmd;
+mod testrun;
 #[cfg(test)]
 mod testutil;
 mod units;
@@ -157,24 +158,39 @@ enum Command {
     },
     /// Run a Model Context Protocol server on stdio, so AI agents can drive dorker
     Mcp,
-    /// Run instrumentation tests in an instance
+    /// Run instrumentation tests in an instance, or in parallel shards on disposable
+    /// instances of an image (--image)
     Test {
-        instance: String,
+        /// Instance to run the tests in (or use --image)
+        #[arg(required_unless_present = "image", conflicts_with = "image")]
+        instance: Option<String>,
+        /// Start disposable instances of this built image (with the app and test APK
+        /// installed), split the suite across them with AndroidJUnitRunner's
+        /// numShards/shardIndex, and remove them afterwards
+        #[arg(long)]
+        image: Option<String>,
+        /// Number of instances (and shards) in --image mode
+        #[arg(long, requires = "image", value_parser = clap::value_parser!(u32).range(1..))]
+        workers: Option<u32>,
+        /// Seconds each --image instance may take to boot
+        #[arg(long, requires = "image")]
+        startup_timeout: Option<u64>,
         /// Instrumentation runner, e.g. com.example.test/androidx.test.runner.AndroidJUnitRunner
         #[arg(long)]
         runner: String,
-        /// Limit to a class or class#method (comma separated)
+        /// Limit to a class or class#method (comma separated); the same filter in every shard
         #[arg(long)]
         class: Option<String>,
 
-        /// Seconds before the run is aborted
+        /// Seconds before the run (with --image: each shard) is aborted
         #[arg(long, default_value_t = 600)]
         timeout: u64,
         /// Print the result as JSON on stdout
         #[arg(long)]
         json: bool,
         /// Also copy the logs (instrument.txt, logcat.txt) to this folder. They are otherwise
-        /// kept inside the instance, which `dorker rm` deletes
+        /// kept inside the instance, which `dorker rm` deletes. With --image, results go to
+        /// <out>/<run-id> (default: ~/.dorker/results/<run-id>)
         #[arg(long)]
         out: Option<std::path::PathBuf>,
     },
@@ -433,6 +449,7 @@ fn run(cli: Cli) -> Result<i32> {
                 logs,
                 owner: None,
                 cancel: None,
+                quiet: false,
             })
         }
         Command::Build {
@@ -478,19 +495,34 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Mcp => mcp::serve(),
         Command::Test {
             instance,
+            image,
+            workers,
+            startup_timeout,
             runner,
             class,
             timeout,
             json,
             out,
-        } => testcmd::run(
-            &instance,
-            &runner,
-            class.as_deref(),
-            timeout,
-            json,
-            out.as_deref(),
-        ),
+        } => match image {
+            Some(image) => testrun::run(testrun::ImageTestArgs {
+                image,
+                workers: workers.unwrap_or(1),
+                runner,
+                class,
+                timeout,
+                startup_timeout: startup_timeout.unwrap_or(300),
+                json,
+                out,
+            }),
+            None => testcmd::run(
+                instance.as_deref().unwrap_or_default(),
+                &runner,
+                class.as_deref(),
+                timeout,
+                json,
+                out.as_deref(),
+            ),
+        },
         Command::Bench {
             image,
             runs,
