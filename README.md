@@ -202,6 +202,24 @@ copied) and copies it into the image store, so `dorker start setup` still brings
 instance back with its data. A new instance restores the saved snapshot in a few seconds,
 with the app state that was on screen.
 
+### Run a script while building
+
+`PROVISION ./setup.sh` in a Dorkerfile runs a host script once, against the build emulator
+(it gets the adb serial). Use it for setup that needs the device, such as turning on a
+developer mode. The result is cached with the image: an unchanged script is not run again.
+See [docs/dorkerfile.md](docs/dorkerfile.md) and [examples/android-auto](examples/android-auto).
+
+### Stop everything
+
+```bash
+dorker stop --all                   # every running instance
+dorker stop --orphans               # emulators dorker lost track of
+```
+
+`dorker ps` warns about an orphan. `--orphans` asks before stopping, because such an
+emulator may belong to another `DORKER_HOME` that is still using it (`--yes` skips the
+question).
+
 ### See what is using disk
 
 ```bash

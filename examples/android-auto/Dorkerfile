@@ -17,6 +17,10 @@ HEADLESS true
 
 INSTALL ./com.google.android.projection.gearhead.xapk
 
+# Runs once, when the image is built: turns on Android Auto's developer mode and starts its
+# head unit server. The snapshot below keeps it running.
+PROVISION ./enable-dev-mode.sh
+
 SETTING window_animation_scale 0
 SETTING transition_animation_scale 0
 SETTING animator_duration_scale 0

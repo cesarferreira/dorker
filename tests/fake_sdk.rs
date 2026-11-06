@@ -47,7 +47,10 @@ case "$1" in
   shell)
     shift
     case "$*" in
-      "getprop sys.boot_completed") if [ -n "$FAKE_NOT_BOOTING" ]; then echo 0; else echo 1; fi ;;
+      "getprop sys.boot_completed")
+        # After `adb reboot` the device is briefly unreachable, once.
+        if [ -f "$FAKE_PIDDIR/$port.reboot" ]; then rm -f "$FAKE_PIDDIR/$port.reboot"; exit 1; fi
+        if [ -n "$FAKE_NOT_BOOTING" ]; then echo 0; else echo 1; fi ;;
       "getprop ro.build.version.sdk") echo 35 ;;
       "pm path android") echo "package:/system/framework/framework-res.apk" ;;
       sync) ;;
@@ -74,6 +77,7 @@ case "$1" in
         printf '\377\000\000\377\000\377\000\377\000\000\377\377\377\377\377\377'
       fi
     fi ;;
+  reboot) touch "$FAKE_PIDDIR/$port.reboot" ;;
   install|install-multiple) echo "Success" ;;
   push) echo "1 file pushed" ;;
   logcat) echo "fake logcat line" ;;
@@ -1737,5 +1741,206 @@ fn commit_saves_a_running_instance_as_a_new_image() {
             .count(),
         1,
         "a rejected commit must leave the instance running"
+    );
+}
+
+#[test]
+fn provision_scripts_run_once_per_build_and_are_part_of_the_cache_key() {
+    let _guard = serial();
+    let f = Fake::new("provision", true);
+    let ctx = f.root.join("ctx-prov");
+    std::fs::create_dir_all(&ctx).unwrap();
+    let log = f.root.join("prov.log");
+    let script = ctx.join("setup.sh");
+    let body = |extra: &str| {
+        format!(
+            "#!/bin/sh\necho \"$# $1 $ANDROID_SERIAL $DORKER_SERIAL $ADB $(pwd)\" >> {}\n{extra}",
+            log.display()
+        )
+    };
+    write_exec(&script, &body(""));
+    std::fs::write(
+        ctx.join("Dorkerfile"),
+        "FROM android:35\nPROVISION ./setup.sh\n",
+    )
+    .unwrap();
+    let build = |args: &[&str]| {
+        let mut a = vec!["build"];
+        a.extend(args);
+        a.push(ctx.to_str().unwrap());
+        f.run(&a)
+    };
+    let runs = || {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .count()
+    };
+
+    // First build: the script runs once, with the serial, adb path and context folder.
+    let first = build(&[]);
+    assert_eq!(code(&first), 0, "{}", text(&first.stderr));
+    let id = text(&first.stdout).trim().to_string();
+    assert_eq!(
+        id.len(),
+        12,
+        "stdout must be only the image id: {:?}",
+        text(&first.stdout)
+    );
+    assert!(
+        text(&first.stderr).contains("[2/2] Running ./setup.sh"),
+        "{}",
+        text(&first.stderr)
+    );
+    assert_eq!(runs(), 1);
+    let line = std::fs::read_to_string(&log).unwrap();
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    assert_eq!(parts[0], "1", "one argument: the serial");
+    assert!(parts[1].starts_with("emulator-"), "{line}");
+    assert_eq!(parts[1], parts[2]);
+    assert_eq!(parts[1], parts[3]);
+    assert!(parts[4].ends_with("platform-tools/adb"), "{line}");
+    assert_eq!(
+        std::fs::canonicalize(parts[5]).unwrap(),
+        std::fs::canonicalize(&ctx).unwrap()
+    );
+    let lock = std::fs::read_to_string(ctx.join("Dorkerfile.lock")).unwrap();
+    assert!(
+        lock.contains("[[provision]]") && lock.contains("setup.sh"),
+        "{lock}"
+    );
+
+    // Same inputs: a cache hit, and the script does not run again.
+    let again = build(&[]);
+    assert_eq!(text(&again.stdout).trim(), id);
+    assert!(text(&again.stderr).contains("Using cached image"));
+    assert_eq!(runs(), 1);
+
+    // Changing the script is a different image.
+    write_exec(&script, &body("# changed\n"));
+    let changed = build(&[]);
+    assert_eq!(code(&changed), 0, "{}", text(&changed.stderr));
+    assert_ne!(text(&changed.stdout).trim(), id);
+    assert_eq!(runs(), 2);
+
+    // --no-cache runs it again for the same image.
+    let forced = build(&["--no-cache"]);
+    assert_eq!(code(&forced), 0, "{}", text(&forced.stderr));
+    assert_eq!(text(&forced.stdout).trim(), text(&changed.stdout).trim());
+    assert_eq!(runs(), 3);
+
+    // A failing script fails the build (exit 4) and publishes nothing new.
+    let before = image_ids(&f);
+    write_exec(&script, &body("exit 3\n"));
+    let failed = build(&[]);
+    assert_eq!(code(&failed), 4, "{}", text(&failed.stderr));
+    assert!(
+        text(&failed.stderr).contains("PROVISION script ./setup.sh failed"),
+        "{}",
+        text(&failed.stderr)
+    );
+    assert_eq!(image_ids(&f), before);
+    wait_until("build emulator to exit", || f.live_emulators().is_empty());
+    assert!(ps_json(&f).is_empty(), "no build instance is left behind");
+
+    // Configuration errors: not executable, and a path outside the build context.
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let not_exec = build(&[]);
+    assert_eq!(code(&not_exec), 2);
+    assert!(
+        text(&not_exec.stderr).contains("not executable"),
+        "{}",
+        text(&not_exec.stderr)
+    );
+    std::fs::write(
+        ctx.join("Dorkerfile"),
+        "FROM android:35\nPROVISION ../outside.sh\n",
+    )
+    .unwrap();
+    std::fs::write(f.root.join("outside.sh"), "#!/bin/sh\n").unwrap();
+    let escaped = build(&[]);
+    assert_eq!(code(&escaped), 2);
+    assert!(
+        text(&escaped.stderr).contains("PROVISION path"),
+        "{}",
+        text(&escaped.stderr)
+    );
+}
+
+#[test]
+fn stop_all_and_orphans_stop_what_dorker_started() {
+    let _guard = serial();
+    let f = Fake::new("stopall", true);
+    for name in ["a", "b"] {
+        assert_eq!(
+            code(&f.run(&["run", "-d", "--name", name, "android:35"])),
+            0
+        );
+    }
+    assert_eq!(f.live_emulators().len(), 2);
+
+    // `stop --all` stops every running instance and keeps their records.
+    let out = f.run(&["stop", "--all"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let names: Vec<String> = text(&out.stdout).lines().map(String::from).collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(
+        text(&out.stderr).contains("Stopped 2 instance(s)"),
+        "{}",
+        text(&out.stderr)
+    );
+    wait_until("emulators to exit", || f.live_emulators().is_empty());
+    assert!(ps_json(&f).iter().all(|i| i["status"] == "STOPPED"));
+    // Nothing running: still fine.
+    assert_eq!(code(&f.run(&["stop", "--all"])), 0);
+
+    // With no instance and no flag, `stop` is a usage error.
+    assert_eq!(code(&f.run(&["stop"])), 2);
+
+    // An emulator whose instance record is gone is an orphan: reported, and only stopped
+    // when asked (and confirmed).
+    assert_eq!(code(&f.run(&["run", "-d", "--name", "c", "android:35"])), 0);
+    let c = ps_json(&f)
+        .into_iter()
+        .find(|i| i["name"] == "c")
+        .expect("c exists");
+    std::fs::remove_dir_all(f.home.join("instances").join(c["id"].as_str().unwrap())).unwrap();
+    let ps = f.run(&["ps"]);
+    assert!(
+        text(&ps.stderr).contains("dorker stop --orphans"),
+        "{}",
+        text(&ps.stderr)
+    );
+    let all = f.run(&["stop", "--all"]);
+    assert_eq!(code(&all), 0);
+    assert!(
+        text(&all.stderr).contains("dorker stop --orphans"),
+        "--all alone must point at --orphans, not kill them: {}",
+        text(&all.stderr)
+    );
+    assert_eq!(
+        f.live_emulators().len(),
+        1,
+        "an orphan is not stopped by --all"
+    );
+
+    // Without a terminal and without --yes it refuses to kill.
+    let refused = f.run(&["stop", "--orphans"]);
+    assert_ne!(code(&refused), 0);
+    assert!(
+        text(&refused.stderr).contains("--yes"),
+        "{}",
+        text(&refused.stderr)
+    );
+    assert_eq!(f.live_emulators().len(), 1);
+
+    let done = f.run(&["stop", "--orphans", "--yes"]);
+    assert_eq!(code(&done), 0, "{}", text(&done.stderr));
+    wait_until("the orphan to exit", || f.live_emulators().is_empty());
+    let none = f.run(&["stop", "--orphans", "--yes"]);
+    assert!(
+        text(&none.stderr).contains("No orphaned emulators"),
+        "{}",
+        text(&none.stderr)
     );
 }

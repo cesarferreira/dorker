@@ -5,11 +5,10 @@ Installs Google's Android Auto app (`com.google.android.projection.gearhead`) fr
 CPU architecture, language and screen density.
 
 ```bash
-cargo install apkeep        # once
-./fetch.sh                  # downloads the Android Auto .xapk
+cargo install apkeep       # once
+./fetch.sh                 # downloads the Android Auto .xapk
 
-dorker build -t gearhead .  # installs the bundle, all splits together
-dorker run -d --name auto gearhead
+dorker run -d --name auto  # builds this Dorkerfile (~1.5 min), then runs it
 dorker exec auto "pm list packages | grep gearhead"
 dorker rm -f auto
 ```
@@ -17,26 +16,31 @@ dorker rm -f auto
 Replace the `.xapk` with a newer one and the next `dorker build` or `dorker run` makes a
 new image, because the file's hash is part of the image identity.
 
-## Setting up the head unit server (once)
+## The head unit server
 
 Android Auto's developer mode is a setting inside the app, so installing the APK does not
 turn it on, and the head unit server (what a head unit emulator connects to) does not run
-until it is started. `enable-dev-mode.sh` does both on a running instance, then you save
-the instance as an image:
+until it is started. The Dorkerfile does both with a `PROVISION` step:
 
-```bash
-dorker run -d --name setup                # builds this Dorkerfile and runs it
-./enable-dev-mode.sh setup                # developer mode on, server started
-dorker commit setup -t gearhead:ready
-dorker run -d --name auto gearhead:ready  # the server is already up
+```dorkerfile
+PROVISION ./enable-dev-mode.sh
 ```
+
+`dorker run` runs the script once, while it builds the image, and the snapshot keeps the
+server running. The first `dorker run` takes about 1.5 minutes; after that an unchanged
+Dorkerfile is a cache hit, and the instance starts in a few seconds with the server already
+listening (port 5277 in the guest).
 
 The script drives the app's UI over adb. It finds each button by its text, not by screen
 position, and it is safe to run again. It needs `adb` and `python3`, and the app's UI must
-be in English. A new instance from the committed image has the server already listening
-(port 5277 in the guest).
+be in English. You can also run it by hand on a running instance and save the result:
 
-To do it by hand instead: Android Auto has no launcher icon, so open its settings with
+```bash
+./enable-dev-mode.sh setup  # a dorker instance name or an adb serial
+dorker commit setup -t gearhead:ready
+```
+
+To do it fully by hand: Android Auto has no launcher icon, so open its settings with
 
 ```bash
 PKG=com.google.android.projection.gearhead
@@ -47,8 +51,7 @@ adb -s emulator-5554 shell am start \
 then scroll to the bottom and tap **Version** about 10 times, choose **OK** in the "Allow
 development settings?" dialog, open the **&#8942;** menu and choose **Start head unit server**.
 
-Checked on an Apple Silicon Mac with `android:36-playstore` and Android Auto 17.9: the
-server survived the commit and a restore.
+Checked on an Apple Silicon Mac with `android:36-playstore` and Android Auto 17.9.
 
 Notes:
 

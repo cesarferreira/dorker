@@ -300,6 +300,55 @@ fn signal_group(pid: u32, sig: &str) {
         .status();
 }
 
+/// Is `pid` still an emulator started as `-avd dorker -port <port>`? (Guards against killing
+/// an unrelated process that reused the pid.)
+fn orphan_alive(pid: u32, port: u16) -> bool {
+    Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout).contains(&format!("-avd dorker -port {port} "))
+                || String::from_utf8_lossy(&o.stdout)
+                    .trim_end()
+                    .ends_with(&format!("-avd dorker -port {port}"))
+        })
+        .unwrap_or(false)
+}
+
+/// Stop an emulator that belongs to no instance record: ask it to quit over its console, then
+/// SIGTERM, then SIGKILL. Returns true when it is gone.
+pub fn kill_orphan(sdk: &Sdk, pid: u32, port: u16) -> bool {
+    let wait = |secs: u64| {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(secs) {
+            if !orphan_alive(pid, port) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        !orphan_alive(pid, port)
+    };
+    if !orphan_alive(pid, port) {
+        return true;
+    }
+    let _ = adb(sdk, &format!("emulator-{port}"))
+        .args(["emu", "kill"])
+        .output();
+    if wait(10) {
+        return true;
+    }
+    let _ = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status();
+    if wait(5) {
+        return true;
+    }
+    let _ = Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .status();
+    wait(5)
+}
+
 /// Reconcile persisted state with reality: a process-expecting state with a dead
 /// process becomes CRASHED (or STOPPED if we were stopping).
 pub fn reconcile(store: &Store, inst: &mut Instance) -> Result<()> {

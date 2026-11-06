@@ -970,7 +970,7 @@ pub fn ps(all: bool, json: bool) -> Result<i32> {
     }
     for (pid, port) in runtime::orphans(&store) {
         eprintln!(
-            "warning: emulator pid {pid} (console port {port}) belongs to no dorker instance; stop it with `kill {pid}`"
+            "warning: emulator pid {pid} (console port {port}) belongs to no dorker instance in this store; `dorker stop --orphans` stops it"
         );
     }
     if json {
@@ -1243,6 +1243,85 @@ pub fn stop(key: &str) -> Result<i32> {
     stop_instance(&sdk, &store, &mut inst)?;
     println!("{}", inst.name);
     Ok(0)
+}
+
+/// `dorker stop --all` / `--orphans`: stop every running instance of this store, and/or
+/// emulators that look like dorker's but have no instance record.
+pub fn stop_all(all: bool, orphans: bool, yes: bool) -> Result<i32> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let store = Store::open()?;
+    let sdk = Sdk::locate().map_err(errors::with(errors::DEPENDENCY))?;
+    let mut failed = false;
+
+    if all {
+        let mut stopped = 0;
+        for found in store.load_all()? {
+            let result = (|| -> Result<bool> {
+                let _op = store.lock_instance(&found.id, OP_TIMEOUT)?;
+                let mut inst = store.find(&found.id)?;
+                runtime::reconcile(&store, &mut inst)?;
+                if !inst.state.expects_process() {
+                    return Ok(false);
+                }
+                stop_instance(&sdk, &store, &mut inst)?;
+                println!("{}", inst.name);
+                Ok(true)
+            })();
+            match result {
+                Ok(true) => stopped += 1,
+                Ok(false) => {}
+                Err(e) => {
+                    eprintln!("error: {}: {e:#}", found.name);
+                    failed = true;
+                }
+            }
+        }
+        eprintln!("Stopped {stopped} instance(s).");
+    }
+
+    let found = runtime::orphans(&store);
+    if !orphans {
+        if !found.is_empty() {
+            eprintln!(
+                "{} more emulator(s) look like dorker's but have no instance in this store \
+                 (see `dorker ps`); `dorker stop --orphans` stops them.",
+                found.len()
+            );
+        }
+    } else if found.is_empty() {
+        eprintln!("No orphaned emulators.");
+    } else {
+        eprintln!("Emulators with no instance in this store:");
+        for (pid, port) in &found {
+            eprintln!("  pid {pid}  console port {port}");
+        }
+        eprintln!(
+            "These match `-avd dorker`, so they were started by dorker, but they may belong to \
+             another DORKER_HOME (another store) that is still using them."
+        );
+        if !yes {
+            if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
+                bail!("not stopping them without confirmation; re-run with --yes");
+            }
+            eprint!("Stop {} emulator(s)? [y/N] ", found.len());
+            let _ = std::io::stderr().flush();
+            let mut line = String::new();
+            std::io::stdin().lock().read_line(&mut line)?;
+            if !matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+                eprintln!("Not stopping them.");
+                return Ok(if failed { 1 } else { 0 });
+            }
+        }
+        for (pid, port) in found {
+            if runtime::kill_orphan(&sdk, pid, port) {
+                println!("pid {pid}");
+            } else {
+                eprintln!("error: pid {pid} did not stop");
+                failed = true;
+            }
+        }
+    }
+    Ok(if failed { 1 } else { 0 })
 }
 
 pub fn rm(key: &str, force: bool) -> Result<i32> {

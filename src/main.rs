@@ -286,8 +286,18 @@ enum Command {
     },
     /// Stop a running instance
     Stop {
-        #[arg(required = true)]
+        #[arg(required_unless_present_any = ["all", "orphans"])]
         instances: Vec<String>,
+        /// Stop every running instance
+        #[arg(long, conflicts_with = "instances")]
+        all: bool,
+        /// Also stop emulators dorker started that have no instance record (they may belong
+        /// to another DORKER_HOME); asks first unless --yes
+        #[arg(long, conflicts_with = "instances")]
+        orphans: bool,
+        /// Do not ask before stopping orphaned emulators
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Remove an instance and its data
     Rm {
@@ -459,7 +469,18 @@ fn run(cli: Cli) -> Result<i32> {
             tag,
             json,
         } => commit::run(&instance, tag.as_deref(), json),
-        Command::Stop { instances } => commands::each(&instances, commands::stop),
+        Command::Stop {
+            instances,
+            all,
+            orphans,
+            yes,
+        } => {
+            if all || orphans {
+                commands::stop_all(all, orphans, yes)
+            } else {
+                commands::each(&instances, commands::stop)
+            }
+        }
         Command::Rm { instances, force } => commands::each(&instances, |i| commands::rm(i, force)),
     }
 }

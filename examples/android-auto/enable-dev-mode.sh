@@ -8,6 +8,9 @@
 #
 # Usage: ./enable-dev-mode.sh [instance-name-or-adb-serial]   (default: setup)
 #
+# Also usable as a Dorkerfile step, which runs it once when the image is built:
+#   PROVISION ./enable-dev-mode.sh      (dorker passes the build emulator's serial)
+#
 # It finds each button by its text (uiautomator), not by screen position, so it does not
 # depend on the screen size. The app's UI must be in English. Needs python3 and adb.
 set -euo pipefail
@@ -123,7 +126,8 @@ fi
 for _ in $(seq 1 20); do
   if adb_ shell "netstat -tln 2>/dev/null | grep -q ':5277 '"; then
     say "head unit server is listening (port 5277)"
-    say "now save it: dorker commit ${TARGET} -t gearhead:ready"
+    # Under `PROVISION` dorker saves the result itself; by hand, suggest the commit.
+    [ -n "${DORKER_SERIAL:-}" ] || say "now save it: dorker commit ${TARGET} -t gearhead:ready"
     exit 0
   fi
   sleep 0.5

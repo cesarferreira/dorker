@@ -56,23 +56,36 @@ fn hex(bytes: &[u8]) -> String {
 /// Resolve a path from the Dorkerfile against the build context, refusing
 /// anything that escapes it (`..`, absolute paths elsewhere, symlinks out).
 pub fn resolve_in_context(context: &Path, written: &str) -> Result<PathBuf> {
+    resolve_directive_path(context, written, "INSTALL")
+}
+
+/// Like `resolve_in_context`, naming the directive (`INSTALL`, `PROVISION`) in errors.
+fn resolve_directive_path(context: &Path, written: &str, directive: &str) -> Result<PathBuf> {
     let joined = context.join(written);
     let real = joined.canonicalize().with_context(|| {
         format!(
-            "INSTALL path not found: {written} (looked for {})",
+            "{directive} path not found: {written} (looked for {})",
             joined.display()
         )
     })?;
     if !real.starts_with(context) {
         bail!(
-            "INSTALL path {written:?} escapes the build context {}",
+            "{directive} path {written:?} escapes the build context {}",
             context.display()
         );
     }
     if !real.is_file() {
-        bail!("INSTALL path {written:?} is not a file");
+        bail!("{directive} path {written:?} is not a file");
     }
     Ok(real)
+}
+
+/// What `build_new` provisions the build emulator with.
+struct Provisioning<'a> {
+    apks: &'a [ResolvedApk],
+    scripts: &'a [ResolvedApk],
+    /// The build context folder (where PROVISION scripts run).
+    context: &'a Path,
 }
 
 pub struct Inputs<'a> {
@@ -83,6 +96,8 @@ pub struct Inputs<'a> {
     pub flavour: &'a str,
     pub emulator_version: &'a str,
     pub apks: &'a [ResolvedApk],
+    /// `PROVISION` scripts (their content hashes are part of the cache key).
+    pub provisions: &'a [ResolvedApk],
 }
 
 /// Everything that determines the built artifact. APK *paths* are excluded;
@@ -113,6 +128,10 @@ pub fn fingerprint(i: &Inputs) -> String {
     );
     for a in i.apks {
         let _ = writeln!(s, "apk={}", a.sha256);
+    }
+    // Only written when used, so images built before PROVISION existed keep their ids.
+    for p in i.provisions {
+        let _ = writeln!(s, "provision={}", p.sha256);
     }
     for st in &d.settings {
         let _ = writeln!(s, "setting={} {} {}", st.namespace, st.key, st.value);
@@ -163,6 +182,13 @@ fn render_lock(i: &Inputs, fp: &str) -> String {
             s,
             "\n[[application]]\npath = \"{}\"\nsha256 = \"{}\"",
             a.written, a.sha256
+        );
+    }
+    for p in i.provisions {
+        let _ = writeln!(
+            s,
+            "\n[[provision]]\npath = \"{}\"\nsha256 = \"{}\"",
+            p.written, p.sha256
         );
     }
     s
@@ -259,6 +285,23 @@ pub fn build_image(a: &BuildArgs) -> Result<ImageMeta> {
         })
         .collect::<Result<_>>()?;
 
+    // PROVISION scripts run on the host, so they must be executable.
+    let provisions: Vec<ResolvedApk> = df
+        .provisions
+        .iter()
+        .map(|w| {
+            let path = resolve_directive_path(&context, w, "PROVISION")
+                .map_err(errors::with(errors::CONFIG))?;
+            require_executable(&path, w).map_err(errors::with(errors::CONFIG))?;
+            let sha256 = sha256_file(&path)?;
+            Ok(ResolvedApk {
+                written: w.clone(),
+                path,
+                sha256,
+            })
+        })
+        .collect::<Result<_>>()?;
+
     let inputs = Inputs {
         df: &df,
         system_image: &sys.package,
@@ -267,6 +310,7 @@ pub fn build_image(a: &BuildArgs) -> Result<ImageMeta> {
         flavour: &sys.flavour,
         emulator_version: &emulator_version,
         apks: &apks,
+        provisions: &provisions,
     };
     let fp = fingerprint(&inputs);
     crate::log::vlog!(
@@ -321,8 +365,20 @@ pub fn build_image(a: &BuildArgs) -> Result<ImageMeta> {
         // A build holds the guest's RAM image (the snapshot) plus provisioned userdata.
         runtime::ensure_free_space(&store.root(), df.memory_mb * 1024 * 1024, "build an image")?;
         runtime::install_interrupt_handler();
-        build_new(&sdk, &store, &sys, &df, &apks, &mut meta, a.timeout)
-            .map_err(errors::with(errors::BUILD))?;
+        build_new(
+            &sdk,
+            &store,
+            &sys,
+            &df,
+            &Provisioning {
+                apks: &apks,
+                scripts: &provisions,
+                context: &context,
+            },
+            &mut meta,
+            a.timeout,
+        )
+        .map_err(errors::with(errors::BUILD))?;
     }
     if let Some(t) = &tag {
         images::apply_tag(&store, &mut meta, t)?;
@@ -338,7 +394,7 @@ fn build_new(
     store: &Store,
     sys: &crate::sdk::SystemImage,
     df: &Dorkerfile,
-    apks: &[ResolvedApk],
+    prov: &Provisioning,
     meta: &mut ImageMeta,
     timeout: u64,
 ) -> Result<()> {
@@ -397,7 +453,7 @@ fn build_new(
     })();
     drop(lock);
 
-    let result = started.and_then(|()| provision(sdk, store, &mut inst, df, apks, timeout));
+    let result = started.and_then(|()| provision(sdk, store, &mut inst, df, prov, timeout));
     // Always stop the build emulator, whatever happened.
     runtime::kill_instance(sdk, &inst, Duration::from_secs(20));
     let published = result.and_then(|()| publish(store, &inst, meta));
@@ -421,19 +477,80 @@ pub(crate) fn adb_checked(sdk: &Sdk, serial: &str, args: &[&str], what: &str) ->
     Ok(text)
 }
 
+/// PROVISION scripts are run directly, so they need the executable bit.
+fn require_executable(path: &Path, written: &str) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if std::fs::metadata(path)?.permissions().mode() & 0o111 == 0 {
+            bail!("PROVISION script {written:?} is not executable; run `chmod +x {written}`");
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (path, written);
+    Ok(())
+}
+
+/// How long one PROVISION script may run before the build gives up on it.
+const PROVISION_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Run a PROVISION script on the host against the build emulator. It gets the adb serial as
+/// its only argument and in `ANDROID_SERIAL` / `DORKER_SERIAL`, the adb path in `ADB`, and
+/// runs in the build context folder. Its output goes to stderr (stdout carries the image id).
+fn run_provision(sdk: &Sdk, serial: &str, script: &ResolvedApk, context: &Path) -> Result<()> {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(&script.path)
+        .arg(serial)
+        .current_dir(context)
+        .env("ANDROID_SERIAL", serial)
+        .env("DORKER_SERIAL", serial)
+        .env("ADB", sdk.adb())
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(std::io::stderr()))
+        .stderr(Stdio::inherit())
+        .spawn()
+        .with_context(|| format!("starting PROVISION script {}", script.written))?;
+    let started = std::time::Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            if status.success() {
+                return Ok(());
+            }
+            bail!("PROVISION script {} failed ({status})", script.written);
+        }
+        if runtime::interrupted() {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("interrupted while running {}", script.written);
+        }
+        if started.elapsed() > PROVISION_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!(
+                "PROVISION script {} did not finish within {} s",
+                script.written,
+                PROVISION_TIMEOUT.as_secs()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 fn provision(
     sdk: &Sdk,
     store: &Store,
     inst: &mut Instance,
     df: &Dorkerfile,
-    apks: &[ResolvedApk],
+    prov: &Provisioning,
     timeout: u64,
 ) -> Result<()> {
+    let (apks, provisions, context) = (prov.apks, prov.scripts, prov.context);
     // Number the steps so a long build shows how far along it is.
     let persists = !apks.is_empty() || !df.settings.is_empty();
     let total = 1
         + apks.len()
         + usize::from(!df.settings.is_empty())
+        + provisions.len()
         + usize::from(persists)
         + usize::from(df.snapshot.is_some());
     let st = crate::style::Style::stderr();
@@ -473,7 +590,7 @@ fn provision(
             &format!("setting {}", s.key),
         )?;
     }
-    if !apks.is_empty() || !df.settings.is_empty() {
+    if persists {
         // Android persists settings and the package database lazily, and an adb
         // reboot is abrupt, so give it time to flush, reboot, then prove the state
         // survived. Otherwise a cold boot of the image would silently lose it.
@@ -500,6 +617,17 @@ fn provision(
                 );
             }
         }
+    }
+    // PROVISION scripts run last, after the persist reboot: they may start things that live in
+    // memory (a server, an open screen) that a reboot would throw away, and the snapshot
+    // below then keeps them running.
+    for script in provisions {
+        step(format!("Running {}", script.written));
+        run_provision(sdk, &serial, script, context)?;
+    }
+    if !provisions.is_empty() {
+        // Flush what the scripts wrote, so a cold boot of the image has it too.
+        adb_checked(sdk, &serial, &["shell", "sync"], "flushing to disk")?;
     }
     if let Some(name) = &df.snapshot {
         step(format!("Saving snapshot {name:?}"));
@@ -576,6 +704,7 @@ mod tests {
             flavour: "google_apis",
             emulator_version: emu,
             apks,
+            provisions: &[],
         }
     }
 

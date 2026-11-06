@@ -3,7 +3,7 @@
 use crate::units::{ImageRef, parse_size_mb};
 use std::fmt;
 
-const DIRECTIVES: [&str; 12] = [
+const DIRECTIVES: [&str; 13] = [
     "FROM",
     "MEMORY",
     "CPUS",
@@ -13,6 +13,7 @@ const DIRECTIVES: [&str; 12] = [
     "HEADLESS",
     "GPU",
     "INSTALL",
+    "PROVISION",
     "SETTING",
     "SNAPSHOT",
     "CMD",
@@ -55,6 +56,8 @@ pub struct Dorkerfile {
     pub gpu: Option<String>,
     /// APK paths exactly as written (relative to the build context).
     pub installs: Vec<String>,
+    /// Host scripts run against the build emulator, in order, exactly as written.
+    pub provisions: Vec<String>,
     pub settings: Vec<Setting>,
     pub snapshot: Option<String>,
     pub cmd: Option<Cmd>,
@@ -221,6 +224,7 @@ pub fn parse(file: &str, source: &str) -> Result<Dorkerfile, ParseError> {
         headless: true,
         gpu: None,
         installs: vec![],
+        provisions: vec![],
         settings: vec![],
         snapshot: None,
         cmd: None,
@@ -273,7 +277,7 @@ pub fn parse(file: &str, source: &str) -> Result<Dorkerfile, ParseError> {
                 ))
             }
         };
-        let singleton = !matches!(directive, "INSTALL" | "SETTING");
+        let singleton = !matches!(directive, "INSTALL" | "PROVISION" | "SETTING");
         if singleton {
             if let Some(prev) = seen.insert(directive, line) {
                 return Err(err(
@@ -385,6 +389,10 @@ pub fn parse(file: &str, source: &str) -> Result<Dorkerfile, ParseError> {
             "INSTALL" => {
                 need(1)?;
                 d.installs.push(args[0].text.clone());
+            }
+            "PROVISION" => {
+                need(1)?;
+                d.provisions.push(args[0].text.clone());
             }
             "SETTING" => {
                 if !(2..=3).contains(&args.len()) {
@@ -514,6 +522,15 @@ mod tests {
             checked >= 2,
             "expected examples in the README and dorkerfile.md, found {checked}"
         );
+    }
+
+    #[test]
+    fn provision_is_repeatable_and_keeps_its_order() {
+        let d =
+            p("FROM android:35\nPROVISION ./a.sh\nINSTALL x.apk\nPROVISION \"b c.sh\"\n").unwrap();
+        assert_eq!(d.provisions, vec!["./a.sh", "b c.sh"]);
+        assert!(p("FROM android:35\nPROVISION\n").is_err());
+        assert!(p("FROM android:35\nPROVISION a b\n").is_err());
     }
 
     #[test]
