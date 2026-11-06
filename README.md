@@ -202,6 +202,27 @@ copied) and copies it into the image store, so `dorker start setup` still brings
 instance back with its data. A new instance restores the saved snapshot in a few seconds,
 with the app state that was on screen.
 
+### Configuration
+
+Settings that differ between machines (a Mac and a Linux box, say) go in
+`~/.config/dorker/config.toml` (`$XDG_CONFIG_HOME/dorker/config.toml` if that is set;
+`DORKER_CONFIG` names another file). Every setting is optional:
+
+```toml
+home = "/mnt/big-disk/dorker"   # where images and instances are kept
+sdk = "~/Android/Sdk"           # the Android SDK
+gpu = "swiftshader_indirect"    # default GPU mode (a GPU line wins)
+min_free_mb = 8192              # least free disk needed to start work
+```
+
+An environment variable beats the file (`DORKER_HOME`, `ANDROID_HOME`,
+`DORKER_MIN_FREE_MB`), and so does a flag or a Dorkerfile line. `dorker config` shows
+each setting in effect and where it came from, `dorker config init` writes a commented
+example, and a mistake in the file is an error that names it. Keep `home` on one
+filesystem: instances are copy-on-write clones of images. `gpu` is part of an image's
+identity, so changing it rebuilds images. Things that carry a risk (`--pull`,
+`--allow-provision`) are not settable here: they stay a flag or an environment variable.
+
 ### Start from a template
 
 ```bash

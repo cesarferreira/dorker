@@ -180,7 +180,9 @@ fn collect() -> Vec<Check> {
         Ok(_) => push(
             "state dir",
             Level::Ok,
-            std::env::var("DORKER_HOME").unwrap_or_else(|_| "~/.dorker".into()),
+            crate::store::default_root()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "~/.dorker".into()),
             None,
         ),
         Err(e) => push(

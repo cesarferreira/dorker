@@ -38,6 +38,9 @@ impl Sdk {
                 candidates.push(v.into());
             }
         }
+        if let Some(sdk) = crate::config::current().sdk {
+            candidates.push(sdk);
+        }
         if let Some(home) = dirs_home() {
             candidates.push(home.join("Library/Android/sdk"));
             candidates.push(home.join("Android/Sdk"));
@@ -53,7 +56,7 @@ impl Sdk {
             }
         }
         bail!(
-            "Android SDK not found. Set ANDROID_HOME, or install the command-line tools:\n  \
+            "Android SDK not found. Set ANDROID_HOME (or `sdk` in the dorker config file), or install the command-line tools:\n  \
              brew install --cask android-commandlinetools"
         )
     }

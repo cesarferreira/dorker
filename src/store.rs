@@ -139,6 +139,19 @@ impl Instance {
     }
 }
 
+/// Where the store lives: `$DORKER_HOME`, else `home` in the config file, else `~/.dorker`.
+pub fn default_root() -> Result<PathBuf> {
+    if let Some(v) = std::env::var_os("DORKER_HOME").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(v));
+    }
+    if let Some(h) = crate::config::get()?.home.clone() {
+        return Ok(h);
+    }
+    Ok(crate::sdk::dirs_home()
+        .context("HOME is not set")?
+        .join(".dorker"))
+}
+
 /// On-disk store rooted at `~/.dorker` (or `$DORKER_HOME`).
 ///
 /// ```text
@@ -162,13 +175,7 @@ impl Drop for LockGuard {
 
 impl Store {
     pub fn open() -> Result<Self> {
-        let root = match std::env::var_os("DORKER_HOME") {
-            Some(v) if !v.is_empty() => PathBuf::from(v),
-            _ => crate::sdk::dirs_home()
-                .context("HOME is not set")?
-                .join(".dorker"),
-        };
-        Self::at(root)
+        Self::at(default_root()?)
     }
 
     pub fn at(root: PathBuf) -> Result<Self> {

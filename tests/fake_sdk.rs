@@ -143,6 +143,7 @@ impl Fake {
         let mut c = Command::new(env!("CARGO_BIN_EXE_dorker"));
         c.args(args)
             .env("DORKER_HOME", &self.home)
+            .env("DORKER_CONFIG", self.root.join("test-config.toml"))
             .env("ANDROID_HOME", &self.sdk)
             .env("ANDROID_SDK_ROOT", &self.sdk)
             .env("FAKE_PIDDIR", &self.piddir)
@@ -1965,4 +1966,38 @@ fn stop_all_and_orphans_stop_what_dorker_started() {
         "{}",
         text(&none.stderr)
     );
+}
+
+#[test]
+fn the_config_gpu_is_the_default_for_a_dorkerfile_without_one() {
+    let _guard = serial();
+    let f = Fake::new("cfggpu", true);
+    let cfg = f.root.join("test-config.toml");
+    let ctx = f.root.join("ctx-gpu");
+    std::fs::create_dir_all(&ctx).unwrap();
+    std::fs::write(ctx.join("Dorkerfile"), "FROM android:35\n").unwrap();
+    let lock_gpu = |f: &Fake| {
+        let out = f.run(&["build", ctx.to_str().unwrap()]);
+        assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+        let lock = std::fs::read_to_string(ctx.join("Dorkerfile.lock")).unwrap();
+        let id = text(&out.stdout).trim().to_string();
+        (
+            lock.lines()
+                .find(|l| l.starts_with("gpu ="))
+                .unwrap()
+                .to_string(),
+            id,
+        )
+    };
+    std::fs::write(&cfg, "gpu = \"guest\"\n").unwrap();
+    let (line, with_config) = lock_gpu(&f);
+    assert_eq!(line, "gpu = \"guest\"");
+    // The GPU mode is part of the image's identity, so another setting is another image.
+    std::fs::write(&cfg, "gpu = \"off\"\n").unwrap();
+    let (line, other) = lock_gpu(&f);
+    assert_eq!(line, "gpu = \"off\"");
+    assert_ne!(with_config, other);
+    // A GPU line in the Dorkerfile still wins over the file.
+    std::fs::write(ctx.join("Dorkerfile"), "FROM android:35\nGPU host\n").unwrap();
+    assert_eq!(lock_gpu(&f).0, "gpu = \"host\"");
 }

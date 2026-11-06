@@ -162,6 +162,7 @@ pub fn min_free_bytes() -> u64 {
     std::env::var("DORKER_MIN_FREE_MB")
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
+        .or(crate::config::current().min_free_mb)
         .map_or(2048 * MIB, |mb| mb * MIB)
 }
 

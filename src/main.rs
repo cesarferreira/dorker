@@ -2,6 +2,7 @@ mod bench;
 mod build;
 mod commands;
 mod commit;
+mod config;
 mod doctor;
 mod dorkerfile;
 mod errors;
@@ -138,6 +139,13 @@ enum Command {
         /// List the templates and exit
         #[arg(long)]
         list: bool,
+    },
+    /// Show the settings in effect and where they come from, or manage the config file
+    Config {
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
+        #[arg(long)]
+        json: bool,
     },
     /// List the project templates, or show what one contains
     Templates {
@@ -341,6 +349,18 @@ enum Command {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum ConfigAction {
+    /// Print where the config file is
+    Path,
+    /// Write an example config file (every setting commented out)
+    Init {
+        /// Replace the file if it exists
+        #[arg(long)]
+        force: bool,
+    },
+}
+
 fn main() {
     let cli = Cli::parse();
     let env_on = std::env::var_os("DORKER_VERBOSE").is_some_and(|v| !v.is_empty() && v != "0");
@@ -369,6 +389,14 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<i32> {
+    // An invalid config file is reported once, up front, naming the file. `config` and
+    // `templates` still work, so the file can be inspected and fixed.
+    if !matches!(
+        cli.command,
+        Command::Config { .. } | Command::Templates { .. }
+    ) {
+        config::get().map_err(errors::with(errors::CONFIG))?;
+    }
     match cli.command {
         Command::Doctor { json } => doctor::run(json),
         Command::Run {
@@ -435,6 +463,11 @@ fn run(cli: Cli) -> Result<i32> {
                 templates::init(template.as_deref(), dir.as_deref(), force)
             }
         }
+        Command::Config { action, json } => match action {
+            None => config::show(json),
+            Some(ConfigAction::Path) => config::print_path(),
+            Some(ConfigAction::Init { force }) => config::init(force),
+        },
         Command::Templates { name, json } => match name {
             Some(n) => templates::show(&n, json),
             None => templates::list(json),

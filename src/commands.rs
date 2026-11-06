@@ -166,9 +166,7 @@ pub fn start(a: &RunArgs, force_cold: bool) -> Result<Started> {
                     2,
                     4096,
                     true,
-                    a.gpu
-                        .clone()
-                        .unwrap_or_else(|| default_gpu(true).to_string()),
+                    a.gpu.clone().unwrap_or_else(|| default_gpu(true)),
                     "pixel_7".to_string(),
                     (1080, 2400),
                 )

@@ -19,7 +19,10 @@ impl Env {
 
     fn cmd(&self, args: &[&str]) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_dorker"));
-        c.args(args).env("DORKER_HOME", &self.home);
+        // A private config path, so a developer's own config file cannot change a test.
+        c.args(args)
+            .env("DORKER_HOME", &self.home)
+            .env("DORKER_CONFIG", self.home.join("test-config.toml"));
         c
     }
 
@@ -34,6 +37,7 @@ impl Drop for Env {
         if let Ok(out) = Command::new(env!("CARGO_BIN_EXE_dorker"))
             .args(["ps", "-a", "--json"])
             .env("DORKER_HOME", &self.home)
+            .env("DORKER_CONFIG", self.home.join("test-config.toml"))
             .output()
         {
             if let Ok(rows) = serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout) {
@@ -41,6 +45,7 @@ impl Drop for Env {
                     let _ = Command::new(env!("CARGO_BIN_EXE_dorker"))
                         .args(["rm", "-f", r["id"].as_str().unwrap_or("")])
                         .env("DORKER_HOME", &self.home)
+                        .env("DORKER_CONFIG", self.home.join("test-config.toml"))
                         .output();
                 }
             }
@@ -620,6 +625,99 @@ fn templates_list_show_and_init() {
         "{err}"
     );
     assert_eq!(code(&e.cmd(&["templates", "nope"]).output().unwrap()), 2);
+}
+
+#[test]
+fn config_file_sets_where_things_live_and_the_environment_wins() {
+    let e = Env::new("config");
+    let cfg = e.home.join("test-config.toml");
+    let json = |c: &mut Command| -> serde_json::Value {
+        let o = c.output().unwrap();
+        assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+        serde_json::from_slice(&o.stdout).unwrap()
+    };
+
+    // No file: everything is a default, and `config init` writes a commented example.
+    let none = e.run(&["config"]);
+    assert_eq!(code(&none), 0);
+    let shown = text(&none.stdout);
+    assert!(
+        shown.contains("none yet") && shown.contains("min_free_mb"),
+        "{shown}"
+    );
+    assert_eq!(
+        text(&e.run(&["config", "path"]).stdout).trim(),
+        cfg.to_str().unwrap()
+    );
+    let init = e.run(&["config", "init"]);
+    assert_eq!(code(&init), 0, "{}", text(&init.stderr));
+    assert!(std::fs::read_to_string(&cfg).unwrap().contains("# home ="));
+    assert_eq!(code(&e.run(&["config", "init"])), 8, "never overwrites");
+    assert_eq!(code(&e.run(&["config", "init", "--force"])), 0);
+
+    // The file moves the store: with DORKER_HOME unset, `home` decides where dorker keeps things.
+    let store = e.home.join("big-disk/dorker");
+    std::fs::write(
+        &cfg,
+        format!(
+            "home = \"{}\"\nmin_free_mb = 1234\ngpu = \"guest\"\n",
+            store.display()
+        ),
+    )
+    .unwrap();
+    let mut from_file = e.cmd(&["config", "--json"]);
+    from_file.env_remove("DORKER_HOME");
+    let v = json(&mut from_file);
+    assert_eq!(v["settings"]["home"]["value"], store.to_str().unwrap());
+    assert_eq!(v["settings"]["home"]["source"], "config file");
+    assert_eq!(v["settings"]["min_free_mb"]["value"], "1234");
+    assert_eq!(v["settings"]["gpu"]["source"], "config file");
+    let mut images = e.cmd(&["images"]);
+    images.env_remove("DORKER_HOME");
+    assert_eq!(code(&images.output().unwrap()), 0);
+    assert!(
+        store.join("images").is_dir(),
+        "the store was created where the file says"
+    );
+
+    // An environment variable beats the file.
+    let other = e.home.join("from-env");
+    let mut env_wins = e.cmd(&["config", "--json"]);
+    env_wins
+        .env("DORKER_HOME", &other)
+        .env("DORKER_MIN_FREE_MB", "77");
+    let v = json(&mut env_wins);
+    assert_eq!(v["settings"]["home"]["value"], other.to_str().unwrap());
+    assert_eq!(v["settings"]["home"]["source"], "DORKER_HOME");
+    assert_eq!(v["settings"]["min_free_mb"]["source"], "DORKER_MIN_FREE_MB");
+
+    // `sdk` is used when no ANDROID_* variable is set.
+    let sdk = e.home.join("my-sdk");
+    std::fs::create_dir_all(sdk.join("platform-tools")).unwrap();
+    std::fs::write(&cfg, format!("sdk = \"{}\"\n", sdk.display())).unwrap();
+    let mut with_sdk = e.cmd(&["config", "--json"]);
+    with_sdk
+        .env_remove("ANDROID_HOME")
+        .env_remove("ANDROID_SDK_ROOT")
+        .env("HOME", &e.home);
+    let v = json(&mut with_sdk);
+    assert_eq!(v["settings"]["sdk"]["value"], sdk.to_str().unwrap());
+    assert_eq!(v["settings"]["sdk"]["source"], "config file");
+
+    // A mistake is a usage error that names the file; `config` and `templates` still work.
+    std::fs::write(&cfg, "hom = \"/x\"\n").unwrap();
+    let bad = e.run(&["images"]);
+    assert_eq!(code(&bad), 2);
+    let err = text(&bad.stderr);
+    assert!(
+        err.contains(cfg.to_str().unwrap()) && err.contains("hom"),
+        "{err}"
+    );
+    assert_eq!(code(&e.run(&["config"])), 2);
+    assert_eq!(code(&e.run(&["config", "path"])), 0);
+    assert_eq!(code(&e.run(&["templates"])), 0);
+    std::fs::write(&cfg, "gpu = \"fast\"\n").unwrap();
+    assert!(text(&e.run(&["images"]).stderr).contains("swiftshader_indirect"));
 }
 
 // ---------- emulator end-to-end (ignored by default) ----------

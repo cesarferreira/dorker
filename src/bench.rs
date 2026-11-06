@@ -57,7 +57,7 @@ fn transient_instance(store: &Store, sys: &crate::sdk::SystemImage) -> Result<In
         device: "pixel_7".into(),
         width: 1080,
         height: 2400,
-        gpu: crate::dorkerfile::default_gpu(true).to_string(),
+        gpu: crate::dorkerfile::default_gpu(true),
         image_id: None,
         snapshot: None,
     };

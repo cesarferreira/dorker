@@ -68,7 +68,7 @@ impl Dorkerfile {
     pub fn gpu_mode(&self) -> String {
         self.gpu
             .clone()
-            .unwrap_or_else(|| default_gpu(self.headless).to_string())
+            .unwrap_or_else(|| default_gpu(self.headless))
     }
 }
 
@@ -76,7 +76,15 @@ impl Dorkerfile {
 /// uses far less CPU than software rendering (about 43% vs 600% while scrolling in our
 /// measurements), so macOS defaults to `host` even when headless. Elsewhere a headless
 /// machine may have no GPU or display (CI, VMs), so `swiftshader_indirect` is the default.
-pub fn default_gpu(headless: bool) -> &'static str {
+pub fn default_gpu(headless: bool) -> String {
+    if let Some(g) = crate::config::current().gpu {
+        return g;
+    }
+    platform_default_gpu(headless).to_string()
+}
+
+/// The built-in default, before the config file is consulted.
+pub fn platform_default_gpu(headless: bool) -> &'static str {
     if !headless {
         "auto"
     } else if cfg!(target_os = "macos") {
