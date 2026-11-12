@@ -73,10 +73,6 @@ enum Command {
         /// `android` CLI accepts the SDK licences for you when it installs.
         #[arg(long)]
         pull: bool,
-        /// Let the Dorkerfile's PROVISION scripts run on this machine without asking (also
-        /// DORKER_ALLOW_PROVISION=1)
-        #[arg(long)]
-        allow_provision: bool,
     },
     /// List images
     Images {
@@ -273,10 +269,6 @@ enum Command {
         /// Stream the device's log (logcat) while attached
         #[arg(long)]
         logs: bool,
-        /// Let the Dorkerfile's PROVISION scripts run on this machine without asking (also
-        /// DORKER_ALLOW_PROVISION=1)
-        #[arg(long)]
-        allow_provision: bool,
     },
     /// List instances
     Ps {
@@ -435,10 +427,8 @@ fn run(cli: Cli) -> Result<i32> {
             json,
             pull,
             logs,
-            allow_provision,
         } => {
-            let image =
-                commands::run_target(image, file.as_deref(), timeout, pull, allow_provision)?;
+            let image = commands::run_target(image, file.as_deref(), timeout, pull)?;
             commands::run(commands::RunArgs {
                 image,
                 name,
@@ -464,7 +454,6 @@ fn run(cli: Cli) -> Result<i32> {
             no_cache,
             timeout,
             pull,
-            allow_provision,
         } => build::build(build::BuildArgs {
             file,
             tag,
@@ -472,7 +461,6 @@ fn run(cli: Cli) -> Result<i32> {
             timeout,
             no_cache,
             pull,
-            allow_provision,
         }),
         Command::Versions { api, all, json } => versions::run(api, all, json),
         Command::Pull { image, file } => commands::pull(image.as_deref(), file.as_deref()),

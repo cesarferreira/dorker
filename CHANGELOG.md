@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Run `FETCH` and `PROVISION` scripts automatically in CLI builds without a confirmation prompt; remove `--allow-provision` and `DORKER_ALLOW_PROVISION`. MCP still refuses to run host scripts.
+
 ## [0.1.7] - 2026-11-06
 
 ### 🚀 Features

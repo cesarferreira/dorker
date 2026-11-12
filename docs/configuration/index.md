@@ -27,7 +27,7 @@ An environment variable beats the file, and so does a flag or a Dorkerfile line.
 | `gpu` | | Default GPU mode. A `GPU` line in the Dorkerfile wins. Part of an image's identity, so changing it rebuilds images |
 | `min_free_mb` | `DORKER_MIN_FREE_MB` | Least free disk needed to start work |
 
-Things that carry a risk are not settable here. `--pull` and `--allow-provision` stay a flag or an environment variable (`DORKER_PULL`, `DORKER_ALLOW_PROVISION`).
+Installing a missing system image without asking is not settable here: use `--pull` or `DORKER_PULL=1`. Dorkerfile host scripts (`FETCH` and `PROVISION`) run automatically in CLI builds; there is no consent setting.
 
 ## Where to put `home`
 

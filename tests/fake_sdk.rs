@@ -158,6 +158,7 @@ impl Fake {
             .env_remove("FAKE_LIST_FILE")
             .env_remove("FAKE_INSTRUMENT")
             .env_remove("FAKE_LOGCAT_HANG")
+            .env_remove("DORKER_MCP")
             .env_remove("DORKER_COLLECT_TIMEOUT_SECS");
         c
     }
@@ -1772,7 +1773,7 @@ fn provision_scripts_run_once_per_build_and_are_part_of_the_cache_key() {
     )
     .unwrap();
     let build = |args: &[&str]| {
-        let mut a = vec!["build", "--allow-provision"];
+        let mut a = vec!["build"];
         a.extend(args);
         a.push(ctx.to_str().unwrap());
         f.run(&a)
@@ -1784,31 +1785,10 @@ fn provision_scripts_run_once_per_build_and_are_part_of_the_cache_key() {
             .count()
     };
 
-    // Host scripts need consent: with no terminal and no flag the build is refused, and the
-    // script does not run (the MCP server is in this position).
-    let refused = f.run(&["build", ctx.to_str().unwrap()]);
-    assert_eq!(code(&refused), 2, "{}", text(&refused.stderr));
-    let why = text(&refused.stderr);
-    assert!(
-        why.contains("./setup.sh") && why.contains("--allow-provision"),
-        "{why}"
-    );
-    assert_eq!(runs(), 0, "a refused build must not run the script");
-    assert!(image_ids(&f).is_empty());
-    // The environment variable is an equivalent opt-in.
-    let mut via_env = f.cmd(&["build", ctx.to_str().unwrap()]);
-    via_env.env("DORKER_ALLOW_PROVISION", "1");
-    let allowed = via_env.output().unwrap();
-    assert_eq!(code(&allowed), 0, "{}", text(&allowed.stderr));
+    // Host scripts run without an opt-in, even without a terminal.
+    let first = build(&[]);
+    assert_eq!(code(&first), 0, "{}", text(&first.stderr));
     assert_eq!(runs(), 1);
-    // Cached from now on, which needs no consent because nothing runs.
-    let cached = f.run(&["build", ctx.to_str().unwrap()]);
-    assert_eq!(code(&cached), 0, "{}", text(&cached.stderr));
-    assert!(text(&cached.stderr).contains("Using cached image"));
-    assert_eq!(runs(), 1);
-
-    // First build: the script runs once, with the serial, adb path and context folder.
-    let first = allowed;
     let id = text(&first.stdout).trim().to_string();
     assert_eq!(
         id.len(),
@@ -1857,6 +1837,20 @@ fn provision_scripts_run_once_per_build_and_are_part_of_the_cache_key() {
     assert_eq!(code(&forced), 0, "{}", text(&forced.stderr));
     assert_eq!(text(&forced.stdout).trim(), text(&changed.stdout).trim());
     assert_eq!(runs(), 3);
+
+    // `run` also builds a changed Dorkerfile without asking.
+    write_exec(&script, &body("# run rebuild\n"));
+    let run = f.run(&[
+        "run",
+        "-d",
+        "-f",
+        ctx.join("Dorkerfile").to_str().unwrap(),
+        "--name",
+        "provisioned",
+    ]);
+    assert_eq!(code(&run), 0, "{}", text(&run.stderr));
+    assert_eq!(runs(), 4);
+    assert_eq!(code(&f.run(&["rm", "-f", "provisioned"])), 0);
 
     // A failing script fails the build (exit 4) and publishes nothing new.
     let before = image_ids(&f);
@@ -2023,14 +2017,7 @@ fn fetch_scripts_run_only_when_an_install_file_is_missing() {
         "FROM android:35\nINSTALL ./a.apk\nFETCH ./fetch.sh\n",
     )
     .unwrap();
-    let build = |flag: bool| {
-        let mut a = vec!["build"];
-        if flag {
-            a.push("--allow-provision");
-        }
-        a.push(ctx.to_str().unwrap());
-        f.run(&a)
-    };
+    let build = || f.run(&["build", ctx.to_str().unwrap()]);
     let runs = || {
         std::fs::read_to_string(&log)
             .unwrap_or_default()
@@ -2038,19 +2025,8 @@ fn fetch_scripts_run_only_when_an_install_file_is_missing() {
             .count()
     };
 
-    // A missing file plus no consent: refused, and nothing ran.
-    let refused = build(false);
-    assert_eq!(code(&refused), 2, "{}", text(&refused.stderr));
-    let why = text(&refused.stderr);
-    assert!(
-        why.contains("FETCH ./fetch.sh") && why.contains("--allow-provision"),
-        "{why}"
-    );
-    assert_eq!(runs(), 0);
-    assert!(!ctx.join("a.apk").exists());
-
-    // With consent the script creates the file and the build goes on.
-    let ok = build(true);
+    // A missing file is fetched without an opt-in, even without a terminal.
+    let ok = build();
     assert_eq!(code(&ok), 0, "{}", text(&ok.stderr));
     assert!(
         text(&ok.stderr).contains("Fetching missing files (./a.apk) with ./fetch.sh"),
@@ -2061,22 +2037,21 @@ fn fetch_scripts_run_only_when_an_install_file_is_missing() {
     assert!(ctx.join("a.apk").is_file());
     let id = text(&ok.stdout).trim().to_string();
 
-    // The file is there now: no script, no consent needed, a cache hit.
-    let again = build(false);
+    // The file is there now: no script runs, and the image is cached.
+    let again = build();
     assert_eq!(code(&again), 0, "{}", text(&again.stderr));
     assert_eq!(text(&again.stdout).trim(), id);
     assert_eq!(runs(), 1);
 
-    // Delete the file and it is fetched again (and asks again).
+    // Delete the file and it is fetched again without asking.
     std::fs::remove_file(ctx.join("a.apk")).unwrap();
-    assert_eq!(code(&build(false)), 2);
-    assert_eq!(code(&build(true)), 0);
+    assert_eq!(code(&build()), 0);
     assert_eq!(runs(), 2);
 
     // A script that does not make the file is an error that says so.
     std::fs::remove_file(ctx.join("a.apk")).unwrap();
     write_exec(&script, &body(""));
-    let lazy = build(true);
+    let lazy = build();
     assert_eq!(code(&lazy), 2);
     assert!(
         text(&lazy.stderr).contains("still missing: ./a.apk"),
@@ -2085,7 +2060,7 @@ fn fetch_scripts_run_only_when_an_install_file_is_missing() {
     );
     // A failing script fails the build (exit 4).
     write_exec(&script, &body("exit 3\n"));
-    let failed = build(true);
+    let failed = build();
     assert_eq!(code(&failed), 4, "{}", text(&failed.stderr));
     assert!(
         text(&failed.stderr).contains("FETCH script ./fetch.sh failed"),
@@ -2094,7 +2069,7 @@ fn fetch_scripts_run_only_when_an_install_file_is_missing() {
     );
     // Without FETCH a missing file is the usual error.
     std::fs::write(ctx.join("Dorkerfile"), "FROM android:35\nINSTALL ./a.apk\n").unwrap();
-    let plain = build(true);
+    let plain = build();
     assert_ne!(code(&plain), 0);
     assert!(
         text(&plain.stderr).contains("INSTALL path not found"),
@@ -2108,13 +2083,59 @@ fn fetch_scripts_run_only_when_an_install_file_is_missing() {
     )
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
-    let not_exec = build(true);
+    let not_exec = build();
     assert_eq!(code(&not_exec), 2);
     assert!(
         text(&not_exec.stderr).contains("not executable"),
         "{}",
         text(&not_exec.stderr)
     );
+}
+
+#[test]
+fn mcp_builds_refuse_host_scripts() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let _guard = serial();
+    let f = Fake::new("mcp-scripts", true);
+    let ctx = f.root.join("ctx");
+    std::fs::create_dir_all(&ctx).unwrap();
+    let marker = ctx.join("ran");
+    write_exec(
+        &ctx.join("setup.sh"),
+        "#!/bin/sh\ntouch ran\nprintf apk > a.apk\n",
+    );
+
+    for directive in ["PROVISION ./setup.sh", "FETCH ./setup.sh\nINSTALL ./a.apk"] {
+        std::fs::write(ctx.join("Dorkerfile"), format!("FROM android:35\n{directive}\n"))
+            .unwrap();
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "dorker_build",
+                "arguments": {"context": ctx.to_str().unwrap()}
+            }
+        });
+        let mut child = f
+            .cmd(&["mcp"])
+            .env("DORKER_MCP", "0")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        writeln!(child.stdin.take().unwrap(), "{request}").unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+        let response: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        assert!(!marker.exists(), "MCP must not run {directive}");
+        assert!(image_ids(&f).is_empty());
+        assert!(f.live_emulators().is_empty());
+    }
 }
 
 // ---------- dorker test --image: sharded runs on disposable workers ----------

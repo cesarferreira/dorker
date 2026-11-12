@@ -47,7 +47,8 @@ download them with a script, like `fetch.sh` in `android-auto`.
 
 If a template needs a script on the host, use `PROVISION` (runs against the build emulator)
 or `FETCH` (creates an `INSTALL` file that is missing, for example by downloading it) in the
-Dorkerfile. `dorker` asks the user before running either, and the MCP server refuses them.
+Dorkerfile. `dorker` runs these scripts automatically without asking; only build trusted
+Dorkerfiles and scripts. The MCP server refuses to run host scripts.
 `android-auto` uses `FETCH ./fetch.sh` so that `dorker run` is the only command needed.
 
 Next: [Build and run →](workflows/build-and-run.md)

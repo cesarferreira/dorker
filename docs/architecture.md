@@ -80,13 +80,13 @@ itself. One crate, synchronous, no daemon.
     processes are broken); `stop` runs `sync` in the guest first so restarts keep data.
 12. **Atomic metadata.** `instance.json` is written to a temp file and renamed.
    A lock file serialises name and port allocation across concurrent runs.
-13. **Host scripts need consent.** `PROVISION` and `FETCH` run arbitrary code on the
-    host while building. `dorker build` / `dorker run` therefore ask first on a
-    terminal and refuse without one unless `--allow-provision` (or
-    `DORKER_ALLOW_PROVISION=1`) is given. The MCP server never passes the flag and
-    removes the variable from the CLI it starts. A cache hit runs nothing, so it asks
-    nothing. Other opt-ins that carry a risk (`--pull`) are likewise flags, never
-    config-file settings, so a global file cannot switch them on for an agent.
+13. **Host scripts run automatically in the CLI.** `PROVISION` and `FETCH` run
+    arbitrary code on the host while building, without a confirmation prompt or
+    opt-in flag, including in CI. Only build trusted Dorkerfiles and scripts.
+    The MCP server sets `DORKER_MCP=1` on the CLI it starts, which refuses to run
+    host scripts. A cache hit runs nothing and remains usable through MCP.
+    Installing missing system images still requires `--pull` or `DORKER_PULL=1`
+    without a terminal; a global config file cannot enable it for an agent.
 14. **Settings that differ per machine live in a config file** (`config.rs`):
     `$DORKER_CONFIG`, else `$XDG_CONFIG_HOME/dorker/config.toml`, else
     `~/.config/dorker/config.toml`. Precedence is flag, then environment variable, then
@@ -142,11 +142,11 @@ itself. One crate, synchronous, no daemon.
 `dorker build` (and `dorker run` with no image) does, in order:
 
 1. Parse the Dorkerfile; if an `INSTALL` file is missing and a `FETCH` script exists,
-   run it (after consent).
+   run it automatically in the CLI (refused through MCP).
 2. Resolve the system image (offering to install it if missing) and hash the inputs into
    the fingerprint. An image with that id is a cache hit: stop here.
-3. Otherwise ask for consent to run `PROVISION` scripts, then boot a transient build
-   instance that doubles as the workspace.
+3. Otherwise check that MCP is not being asked to run `PROVISION` scripts, then boot
+   a transient build instance that doubles as the workspace.
 4. Install the `INSTALL` files, apply the `SETTING`s, then flush, reboot and verify they
    persisted (so a cold boot of the image has them).
 5. Run the `PROVISION` scripts against the build emulator, then `sync`. They run after the

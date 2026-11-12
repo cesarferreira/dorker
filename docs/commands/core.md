@@ -15,7 +15,7 @@ Day-to-day commands. Flags for a command are in `dorker <command> --help`. Most 
 | `dorker ls` | Images, instances, and storage. Alias: `dorker df` |
 | `dorker prune` | Remove images you no longer need |
 
-`dorker build` and `dorker run` offer to install a missing system image. Pass `--pull` (or set `DORKER_PULL=1`) to install without asking. A Dorkerfile with `FETCH` or `PROVISION` asks before those scripts run. Pass `--allow-provision` (or set `DORKER_ALLOW_PROVISION=1`) to allow them without a prompt.
+`dorker build` and `dorker run` offer to install a missing system image. Pass `--pull` (or set `DORKER_PULL=1`) to install without asking. A Dorkerfile's `FETCH` and `PROVISION` scripts run automatically without a confirmation prompt, including in CI. They execute code on your machine, so only build trusted Dorkerfiles and scripts. The MCP server refuses to run them.
 
 ## Instances
 

@@ -12,8 +12,8 @@ dorker rm -f auto
 ```
 
 The Dorkerfile's `FETCH ./fetch.sh` line makes dorker run `fetch.sh` (which downloads the
-latest `.xapk` with apkeep) only when the file is missing, and it asks first because it is a
-script on your machine. A file that is already there is never replaced: delete it, or run
+latest `.xapk` with apkeep) only when the file is missing, without a confirmation prompt.
+It runs code on your machine, so read it before building. A file already there is never replaced: delete it, or run
 `./fetch.sh`, to get a newer one. A new file has a new hash, so the next `dorker build` or
 `dorker run` makes a new image.
 
@@ -28,9 +28,8 @@ PROVISION ./enable-dev-mode.sh
 ```
 
 `dorker run` runs the script once, while it builds the image, and the snapshot keeps the
-server running. It asks once before running the scripts (they are code on your machine, so read
-it first; `--allow-provision` skips the question). The first `dorker run` takes about
-1.5 minutes; after that an unchanged
+server running. Scripts run automatically without a confirmation prompt, so only build trusted
+Dorkerfiles and scripts. The first `dorker run` takes about 1.5 minutes; after that an unchanged
 Dorkerfile is a cache hit, and the instance starts in a few seconds with the server already
 listening (port 5277 in the guest).
 

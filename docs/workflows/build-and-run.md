@@ -23,7 +23,7 @@ On a Mac the emulator renders on the GPU by default (`GPU host`), which keeps it
 
 ## Run scripts while building
 
-Two directives run a script on your machine while an image is built. Both are cached with the image, and both ask before they run.
+Two directives run a script on your machine while an image is built. Both run automatically without a confirmation prompt when needed; the rules below determine when each script is skipped.
 
 ```dorkerfile
 FROM android:35
@@ -35,7 +35,7 @@ PROVISION ./setup.sh  # runs once, against the build emulator
 - `FETCH` is for files `INSTALL` needs and you do not commit (a download, for example). It runs only when one of them is missing, never when it is there, so a cached build downloads nothing. Delete the file, or run the script yourself, to refresh it.
 - `PROVISION` gets the build emulator's adb serial. Use it for setup that needs the device, such as turning on a developer mode. An unchanged script is not run again.
 
-They are code on your machine, so `dorker build` and `dorker run` list them and ask first. Without a terminal (scripts, CI) pass `--allow-provision` or set `DORKER_ALLOW_PROVISION=1`. The MCP server refuses them. The rules are in the [Dorkerfile reference](../dorkerfile.md).
+`dorker build` and `dorker run` run these scripts automatically, including in CI. They execute code on your machine, so only build trusted Dorkerfiles and scripts. The MCP server refuses to run them. The rules are in the [Dorkerfile reference](../dorkerfile.md).
 
 ## Start from a template
 
@@ -62,7 +62,7 @@ dorker init --template playstore my-app      # or into another folder
 ```bash
 cargo install apkeep       # once: downloads the app
 dorker init --template android-auto-with-dev-mode
-dorker run -d --name auto  # asks once, then does it all
+dorker run -d --name auto  # downloads, installs and configures Android Auto
 ```
 
 `dorker run` downloads the Android Auto `.xapk` (the `FETCH` line), installs it with its split APKs, turns on developer mode and starts the head unit server (the `PROVISION` line), and saves a snapshot. The first run takes about 1.5 minutes:

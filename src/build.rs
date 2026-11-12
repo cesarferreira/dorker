@@ -23,50 +23,21 @@ pub struct BuildArgs {
     pub no_cache: bool,
     /// Install a missing system image without asking (`--pull`).
     pub pull: bool,
-    /// Allow `PROVISION` scripts to run without asking (`--allow-provision`).
-    pub allow_provision: bool,
 }
 
-/// Decide whether the Dorkerfile's `PROVISION` scripts may run on this machine. They are
-/// arbitrary host code, so, like a Makefile target from a repository you have just cloned,
-/// they need consent: `--allow-provision` or `DORKER_ALLOW_PROVISION=1`, or a yes at the
-/// prompt on a terminal. Anything that cannot be asked (a script, CI, the MCP server) is
-/// refused unless the flag was given.
-/// `scripts` are the lines to show, such as `FETCH ./fetch.sh` or `PROVISION ./setup.sh`.
-fn authorize_scripts(scripts: &[String], flag: bool) -> Result<()> {
-    use std::io::{BufRead, IsTerminal, Write};
-    let env_ok = std::env::var("DORKER_ALLOW_PROVISION").is_ok_and(|v| !v.is_empty() && v != "0");
-    if flag || env_ok {
+/// CLI builds run host scripts automatically; MCP builds must never run them.
+fn authorize_scripts(directive: &str, scripts: &[String]) -> Result<()> {
+    if scripts.is_empty() || std::env::var_os("DORKER_MCP").is_none_or(|v| v != "1") {
         return Ok(());
     }
     let list = scripts
         .iter()
-        .map(|s| format!("  {s}"))
+        .map(|script| format!("  {directive} {script}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let cfg = errors::with(errors::CONFIG);
-    if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
-        return Err(cfg(anyhow::anyhow!(
-            "this Dorkerfile runs scripts on your machine while building:\n{list}\n\n\
-             Read them, then re-run with --allow-provision (or set DORKER_ALLOW_PROVISION=1) to allow it."
-        )));
-    }
-    eprintln!("This Dorkerfile runs scripts on your machine while building:\n{list}");
-    for _ in 0..3 {
-        eprint!("Run them now? [y/N] ");
-        let _ = std::io::stderr().flush();
-        let mut line = String::new();
-        if std::io::stdin().lock().read_line(&mut line).unwrap_or(0) == 0 {
-            break;
-        }
-        match line.trim().to_ascii_lowercase().as_str() {
-            "y" | "yes" => return Ok(()),
-            "" | "n" | "no" => break,
-            _ => {}
-        }
-    }
-    Err(cfg(anyhow::anyhow!(
-        "not running the scripts; the image was not built"
+    Err(errors::with(errors::CONFIG)(anyhow::anyhow!(
+        "the MCP server cannot run host scripts:\n{list}\n\n\
+         Build this image yourself with `dorker build`, then run the built image."
     )))
 }
 
@@ -297,7 +268,7 @@ pub fn build_image(a: &BuildArgs) -> Result<ImageMeta> {
         dorkerfile::parse(&display, &source).map_err(|e| errors::with(errors::CONFIG)(e.into()))?;
     let tag = a.tag.as_deref().map(images::normalize_tag).transpose()?;
     // FETCH scripts come first: INSTALL files must exist before they can be hashed.
-    let authorized = run_fetches(&df, &context, a.allow_provision)?;
+    run_fetches(&df, &context)?;
 
     let sdk = Sdk::locate().map_err(errors::with(errors::DEPENDENCY))?;
     let sys = crate::commands::resolve_or_pull(
@@ -409,14 +380,7 @@ pub fn build_image(a: &BuildArgs) -> Result<ImageMeta> {
         images::touch_used(&store, &id);
         eprintln!("Using cached image {id} (identical Dorkerfile, APKs and toolchain)");
     } else {
-        if !df.provisions.is_empty() {
-            let lines: Vec<String> = df
-                .provisions
-                .iter()
-                .map(|p| format!("PROVISION {p}"))
-                .collect();
-            authorize_scripts(&lines, authorized)?;
-        }
+        authorize_scripts("PROVISION", &df.provisions)?;
         // A build holds the guest's RAM image (the snapshot) plus provisioned userdata.
         runtime::ensure_free_space(&store.root(), df.memory_mb * 1024 * 1024, "build an image")?;
         runtime::install_interrupt_handler();
@@ -608,9 +572,8 @@ fn run_script(
 
 /// `FETCH` scripts create `INSTALL` files that are missing (for example by downloading them).
 /// They run only when a file is missing, so a cached build downloads nothing and a build stays
-/// reproducible; delete the file, or run the script yourself, to refresh it. Returns whether
-/// the user has already agreed to run the Dorkerfile's scripts.
-fn run_fetches(df: &Dorkerfile, context: &Path, flag: bool) -> Result<bool> {
+/// reproducible; delete the file, or run the script yourself, to refresh it.
+fn run_fetches(df: &Dorkerfile, context: &Path) -> Result<()> {
     let missing = |df: &Dorkerfile| -> Vec<String> {
         df.installs
             .iter()
@@ -620,12 +583,9 @@ fn run_fetches(df: &Dorkerfile, context: &Path, flag: bool) -> Result<bool> {
     };
     let wanted = missing(df);
     if wanted.is_empty() || df.fetches.is_empty() {
-        return Ok(flag);
+        return Ok(());
     }
-    // Ask once for everything that will run, the PROVISION scripts included.
-    let mut lines: Vec<String> = df.fetches.iter().map(|f| format!("FETCH {f}")).collect();
-    lines.extend(df.provisions.iter().map(|p| format!("PROVISION {p}")));
-    authorize_scripts(&lines, flag)?;
+    authorize_scripts("FETCH", &df.fetches)?;
     let cfg = errors::with(errors::CONFIG);
     for written in &df.fetches {
         let path = resolve_directive_path(context, written, "FETCH").map_err(cfg)?;
@@ -648,7 +608,7 @@ fn run_fetches(df: &Dorkerfile, context: &Path, flag: bool) -> Result<bool> {
             still.join(", ")
         )));
     }
-    Ok(true)
+    Ok(())
 }
 
 fn provision(

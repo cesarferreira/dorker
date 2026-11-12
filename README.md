@@ -235,7 +235,7 @@ welcome as pull requests: see [docs/templates.md](docs/templates.md).
 ```bash
 cargo install apkeep       # once: downloads the app
 dorker init --template android-auto-with-dev-mode
-dorker run -d --name auto  # asks once, then does it all
+dorker run -d --name auto  # downloads, installs and configures Android Auto
 ```
 
 `dorker run` downloads the Android Auto `.xapk` (the `FETCH` line), installs it with its
@@ -259,8 +259,8 @@ Android Auto stub that the real app cannot replace; see its README with
 
 ### Run scripts while building
 
-Two directives run a script on your machine while an image is built. Both are cached with
-the image, and both ask before they run (see below).
+Two directives run a script on your machine while an image is built. Both run automatically
+without a confirmation prompt when needed (see below).
 
 ```dorkerfile
 FROM android:35
@@ -275,9 +275,9 @@ PROVISION ./setup.sh  # runs once, against the build emulator
 - `PROVISION` gets the build emulator's adb serial. Use it for setup that needs the device,
   such as turning on a developer mode. An unchanged script is not run again.
 
-They are code on your machine, so `dorker build` / `dorker run` list them and ask first
-(read them). Without a terminal (scripts, CI) pass `--allow-provision` or set
-`DORKER_ALLOW_PROVISION=1`; the MCP server refuses them. Details in
+`dorker build` / `dorker run` run these scripts automatically, including in CI,
+without a confirmation prompt. They execute code on your machine, so only build
+trusted Dorkerfiles and scripts. The MCP server refuses to run them. Details in
 [docs/dorkerfile.md](docs/dorkerfile.md).
 
 ### Keep what you set up by hand
@@ -313,8 +313,8 @@ An environment variable beats the file (`DORKER_HOME`, `ANDROID_HOME`,
 `DORKER_MIN_FREE_MB`), and so does a flag or a Dorkerfile line. `dorker config` shows
 each setting in effect and where it came from, `dorker config init` writes a commented
 example, and a mistake in the file is an error that names it. `gpu` is part of an image's
-identity, so changing it rebuilds images. Things that carry a risk (`--pull`,
-`--allow-provision`) are not settable here: they stay a flag or an environment variable.
+identity, so changing it rebuilds images. Installing a missing system image without asking
+is not settable here: use `--pull` or `DORKER_PULL=1`.
 
 Put `home` on one local filesystem that can clone files. A new instance is a clone of
 its image: `cp -c` on macOS (APFS) and `cp --reflink=auto` on Linux. That is a reflink on
