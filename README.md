@@ -433,6 +433,10 @@ See [docs/mcp.md](docs/mcp.md) for the tools, other clients and security notes. 
 operations are available to scripts as `--json` on `run`, `start`, `exec`, `install`,
 `screenshot`, `test`, `ps`, `images`, `doctor`, `bench`, `versions`, `prune` and `ls`.
 
+To teach an agent the CLI instead, run `dorker skill install`. It writes a `SKILL.md`
+that matches your installed version to `~/.agents/skills/dorker/`, and running it again
+replaces the file.
+
 ### Diagnostics
 
 `doctor`, `ls`, `ps`, `images`, `versions`, `prune`, `config` and `templates` colour their

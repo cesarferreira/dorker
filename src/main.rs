@@ -15,6 +15,7 @@ mod pool;
 mod prune;
 mod runtime;
 mod sdk;
+mod skill;
 mod store;
 mod style;
 mod templates;
@@ -152,6 +153,11 @@ enum Command {
         name: Option<String>,
         #[arg(long)]
         json: bool,
+    },
+    /// Manage the dorker skill for AI coding agents
+    Skill {
+        #[command(subcommand)]
+        action: SkillAction,
     },
     /// Run a Model Context Protocol server on stdio, so AI agents can drive dorker
     Mcp,
@@ -364,6 +370,12 @@ enum Command {
 }
 
 #[derive(Subcommand, Debug)]
+enum SkillAction {
+    /// Install the dorker skill for AI agents into ~/.agents/skills/dorker
+    Install,
+}
+
+#[derive(Subcommand, Debug)]
 enum ConfigAction {
     /// Print where the config file is
     Path,
@@ -486,6 +498,9 @@ fn run(cli: Cli) -> Result<i32> {
             None => templates::list(json),
         },
         Command::Mcp => mcp::serve(),
+        Command::Skill { action } => match action {
+            SkillAction::Install => skill::install(),
+        },
         Command::Test {
             instance,
             image,

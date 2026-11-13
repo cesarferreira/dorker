@@ -31,6 +31,39 @@ impl Env {
     }
 }
 
+#[test]
+fn skill_install_writes_the_skill_under_agents_skills() {
+    let e = Env::new("skill");
+    let out = e
+        .cmd(&["skill", "install"])
+        .env("HOME", &e.home)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let file = e.home.join(".agents/skills/dorker/SKILL.md");
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("name: dorker"));
+    // Running it again replaces the file instead of failing.
+    std::fs::write(&file, "stale").unwrap();
+    assert!(
+        e.cmd(&["skill", "install"])
+            .env("HOME", &e.home)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("name: dorker")
+    );
+}
+
 impl Drop for Env {
     fn drop(&mut self) {
         // Best effort: stop anything a failed test left running.

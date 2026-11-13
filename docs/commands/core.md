@@ -60,6 +60,7 @@ Day-to-day commands. Flags for a command are in `dorker <command> --help`. Most 
 | `dorker config` | Show each setting in effect and where it came from |
 | `dorker config init` | Write a commented example config |
 | `dorker mcp` | Model Context Protocol server for AI agents |
+| `dorker skill install` | Install the dorker skill for AI agents into `~/.agents/skills/dorker` |
 
 `dorker -v <command>` (or `DORKER_VERBOSE=1`) prints what dorker decides and runs, on stderr: the located SDK, the boot mode and why, the exact emulator command line and environment, state transitions, and timings. Each instance also keeps its raw emulator output in `~/.dorker/instances/<id>/emulator.log`.
 
