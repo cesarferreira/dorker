@@ -2108,8 +2108,11 @@ fn mcp_builds_refuse_host_scripts() {
     );
 
     for directive in ["PROVISION ./setup.sh", "FETCH ./setup.sh\nINSTALL ./a.apk"] {
-        std::fs::write(ctx.join("Dorkerfile"), format!("FROM android:35\n{directive}\n"))
-            .unwrap();
+        std::fs::write(
+            ctx.join("Dorkerfile"),
+            format!("FROM android:35\n{directive}\n"),
+        )
+        .unwrap();
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
