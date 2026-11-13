@@ -2,12 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.1.8] - 2026-11-13
 
-### Changed
+### 🚀 Features
 
-- Run `FETCH` and `PROVISION` scripts automatically in CLI builds without a confirmation prompt; remove `--allow-provision` and `DORKER_ALLOW_PROVISION`. MCP still refuses to run host scripts.
+- Add an internal worker pool with run ownership, resource admission and cancellation cleanup
+- Run instrumentation suites sharded across disposable workers with dorker test --image
+- Keep durable reports for sharded test runs: summary, JUnit, per-shard diagnostics
+- Add dorker test --force to start the workers when the capacity check says they do not fit
 
+### 🐛 Bug Fixes
+
+- Say the build boots a temporary emulator to prepare the image
+- Run Dorkerfile host scripts without prompting
+
+### 💼 Other
+
+- Added skills
+
+### 📚 Documentation
+
+- Say where image clones are cheap, and record the local-disk timings
+- Docs
+
+### 🎨 Styling
+
+- Format fake_sdk test with rustfmt
+
+### ⚙️ Miscellaneous Tasks
+
+- Stop tracking the example Dorkerfile.lock files, which pin hashes of locally built APKs
 ## [0.1.7] - 2026-11-06
 
 ### 🚀 Features
