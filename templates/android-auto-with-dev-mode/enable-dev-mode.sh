@@ -35,10 +35,12 @@ fi
 adb_() { "$ADB" -s "$SERIAL" "$@"; }
 say() { echo "• $*"; }
 
-# Dump the screen's UI tree as XML.
+# Dump the screen's UI tree as XML; print nothing (and succeed) when the dump fails, which
+# happens while the screen is still changing.
 dump() {
-  adb_ shell uiautomator dump /sdcard/dorker-ui.xml >/dev/null 2>&1
-  adb_ shell cat /sdcard/dorker-ui.xml
+  adb_ shell rm -f /sdcard/dorker-ui.xml >/dev/null 2>&1 || true
+  adb_ shell uiautomator dump /sdcard/dorker-ui.xml >/dev/null 2>&1 || true
+  adb_ shell cat /sdcard/dorker-ui.xml 2>/dev/null || true
 }
 
 # Print "x y" for the centre of the first element whose text or content description
@@ -69,6 +71,41 @@ for n in root.iter("node"):
 
 tap() { adb_ shell input tap "$1" "$2"; }
 
+# A slow emulator (software rendering, a fresh boot) can show "<app> isn't responding" over
+# everything, and the taps then hit the dialog instead of the app. A hung System UI keeps
+# coming back while it waits, so close it (Android restarts it at once); for any other app,
+# wait.
+dismiss_anr() {
+  local screen pos button
+  for _ in 1 2 3 4 5; do
+    screen="$(dump)"
+    grep -q "isn't responding\|isn&apos;t responding" <<<"$screen" || return 0
+    if grep -q "System UI isn" <<<"$screen"; then button="Close app"; else button="Wait"; fi
+    pos="$(center_of "$button" <<<"$screen")"
+    [ -n "$pos" ] || return 0
+    say "an app is not responding: tapping \"$button\""
+    # shellcheck disable=SC2086
+    tap $pos
+    sleep 3
+  done
+}
+
+# Wait until the device has gone a few seconds without a "not responding" dialog: right
+# after a boot, software rendering keeps System UI busy for a while.
+settle() {
+  local calm=0
+  for _ in $(seq 1 40); do
+    if dump | grep -q "isn't responding\|isn&apos;t responding"; then
+      calm=0
+      dismiss_anr
+    else
+      calm=$((calm + 1))
+      [ "$calm" -ge 3 ] && return 0
+    fi
+    sleep 2
+  done
+}
+
 # Tap the element labelled $1 if it is on screen; fail quietly (return 1) if it is not.
 tap_label() {
   local pos
@@ -79,30 +116,44 @@ tap_label() {
 }
 
 open_settings() {
+  dismiss_anr
   adb_ shell am force-stop "$PKG" >/dev/null
   adb_ shell am start -n "$SETTINGS" >/dev/null
-  # Wait for the screen to draw.
-  for _ in $(seq 1 20); do
-    dump | grep -q 'Connect a vehicle\|Messaging\|Android Auto' && return 0
+  # Wait for the list to draw (the toolbar alone says "Android Auto" too early).
+  for _ in $(seq 1 30); do
+    dismiss_anr
+    dump | grep -q 'Connect a vehicle\|Messaging' && return 0
     sleep 0.5
   done
   echo "Android Auto's settings did not open (is the app installed?)" >&2
   return 1
 }
 
-# Open the overflow menu and tap "Start head unit server" if it is offered.
+# Open the overflow menu and tap "Start head unit server" if it is offered. The menu can
+# ignore a tap while the screen is still settling, so try a few times; a menu without the
+# entry (developer mode off) is closed again.
 start_server() {
-  tap_label "More options" || return 1
-  sleep 0.7
-  tap_label "Start head unit server"
+  for _ in 1 2 3 4; do
+    dismiss_anr
+    tap_label "More options" || { sleep 1; continue; }
+    sleep 1
+    if tap_label "Start head unit server"; then return 0; fi
+    if dump | grep -q 'Help &amp; feedback\|Help & feedback'; then
+      adb_ shell input keyevent KEYCODE_BACK
+      return 1
+    fi
+  done
+  return 1
 }
 
+say "waiting for $SERIAL to settle"
+settle
 say "opening Android Auto settings on $SERIAL"
 open_settings
 
 if ! start_server; then
   say "developer mode is off: enabling it"
-  # "Version" is at the bottom of the list.
+  # "Version" ("Version and permission info" in 18.x) is at the bottom of the list.
   found=
   for _ in $(seq 1 10); do
     if [ -n "$(dump | center_of "Version")" ]; then found=1; break; fi
@@ -110,10 +161,22 @@ if ! start_server; then
     sleep 0.4
   done
   [ -n "$found" ] || { echo "could not find the Version row" >&2; exit 1; }
+  # In 18.x the first tap expands the package details under the row, which moves the row.
+  # So tap once, scroll to the very end, let the list settle (taps during a fling only stop
+  # it), and find the row again before the real taps.
   pos="$(dump | center_of "Version")"
   # shellcheck disable=SC2086
-  for _ in $(seq 1 10); do tap $pos; sleep 0.25; done
+  tap $pos
   sleep 1
+  for _ in 1 2 3; do adb_ shell input swipe 540 2000 540 600 200; done
+  sleep 1.5
+  pos="$(dump | center_of "Version")"
+  [ -n "$pos" ] || { echo "lost the Version row" >&2; exit 1; }
+  # Ten quick taps in one adb call: separate calls are too slow on a slow emulator, and
+  # the app then counts them as unrelated taps.
+  set -- $pos
+  adb_ shell "for i in 1 2 3 4 5 6 7 8 9 10; do input tap $1 $2; done"
+  sleep 1.5
   # "Allow development settings?" -> OK
   tap_label "OK" || { echo "the developer-settings prompt did not appear" >&2; exit 1; }
   sleep 1
