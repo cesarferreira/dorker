@@ -704,9 +704,10 @@ pub fn images(json: bool) -> Result<i32> {
 
 pub fn rmi(key: &str) -> Result<i32> {
     let store = Store::open()?;
-    let meta = images::find(&store, key)?;
-    images::remove(&store, &meta)?;
-    println!("{}", meta.id);
+    match images::remove_by_key(&store, key)? {
+        images::Removed::Untagged(tag) => println!("Untagged: {tag}"),
+        images::Removed::Deleted(id) => println!("{id}"),
+    }
     Ok(0)
 }
 

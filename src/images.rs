@@ -172,6 +172,30 @@ pub fn apply_tag(store: &Store, meta: &mut ImageMeta, tag: &str) -> Result<()> {
     save_meta(store, meta)
 }
 
+/// What `dorker rmi` did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Removed {
+    /// The image had other tags: only this one was removed.
+    Untagged(String),
+    /// The image itself was deleted (its id).
+    Deleted(String),
+}
+
+/// Remove `key` like `docker rmi`: a tag of an image that has other tags only loses that
+/// tag; the last tag, or an image id, deletes the image.
+pub fn remove_by_key(store: &Store, key: &str) -> Result<Removed> {
+    let mut meta = find(store, key)?;
+    if let Ok(tag) = normalize_tag(key) {
+        if meta.tags.len() > 1 && meta.tags.contains(&tag) {
+            meta.tags.retain(|t| *t != tag);
+            save_meta(store, &meta)?;
+            return Ok(Removed::Untagged(tag));
+        }
+    }
+    remove(store, &meta)?;
+    Ok(Removed::Deleted(meta.id))
+}
+
 pub fn remove(store: &Store, meta: &ImageMeta) -> Result<()> {
     let dir = image_dir(store, &meta.id);
     if dir.parent() != Some(store.images_dir().as_path())
@@ -316,6 +340,42 @@ mod tests {
     fn put(store: &Store, m: &ImageMeta) {
         fs::create_dir_all(image_dir(store, &m.id)).unwrap();
         save_meta(store, m).unwrap();
+    }
+
+    #[test]
+    fn rmi_of_one_tag_keeps_the_image_and_its_other_tags() {
+        let d = Dir::new();
+        let store = Store::at(d.path().to_path_buf()).unwrap();
+        put(
+            &store,
+            &meta("aaa111", &["gearhead:dev", "ghcr.io/org/gearhead:37"]),
+        );
+
+        let r = remove_by_key(&store, "gearhead:dev").unwrap();
+        assert_eq!(r, Removed::Untagged("gearhead:dev".into()));
+        let left = find(&store, "ghcr.io/org/gearhead:37").unwrap();
+        assert_eq!(left.tags, vec!["ghcr.io/org/gearhead:37"]);
+        assert!(image_dir(&store, "aaa111").is_dir());
+        assert!(find(&store, "gearhead:dev").is_err());
+
+        // The last tag deletes the image.
+        assert_eq!(
+            remove_by_key(&store, "ghcr.io/org/gearhead:37").unwrap(),
+            Removed::Deleted("aaa111".into())
+        );
+        assert!(!image_dir(&store, "aaa111").exists());
+    }
+
+    #[test]
+    fn rmi_by_id_deletes_the_image_with_all_its_tags() {
+        let d = Dir::new();
+        let store = Store::at(d.path().to_path_buf()).unwrap();
+        put(&store, &meta("bbb222", &["a:1", "b:2"]));
+        assert_eq!(
+            remove_by_key(&store, "bbb2").unwrap(),
+            Removed::Deleted("bbb222".into())
+        );
+        assert!(list(&store).unwrap().is_empty());
     }
 
     #[test]

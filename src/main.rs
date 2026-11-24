@@ -81,7 +81,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Remove an image
+    /// Remove an image tag; the image's last tag, or its id, removes the image
     Rmi { image: String },
     /// Show images, instances and the disk space they use
     #[command(alias = "df")]
