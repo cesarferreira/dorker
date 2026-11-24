@@ -2628,8 +2628,21 @@ fn image_mode_startup_failures_and_bad_arguments() {
     assert_eq!(code(&out), 5, "{}", text(&out.stderr));
     let s = summary(&out);
     assert_eq!(s["verdict"], "startup_failed");
-    assert_eq!(s["workers"][0]["status"], "startup_failed");
-    let log = PathBuf::from(s["workers"][0]["dir"].as_str().unwrap()).join("emulator.log");
+    // Both workers crash, but in no fixed order: the first failure cancels the pool, so
+    // a worker that had not finished starting yet is `not_run`. At least one is
+    // `startup_failed`, and none ran tests.
+    let workers = s["workers"].as_array().unwrap();
+    assert!(
+        workers
+            .iter()
+            .all(|w| w["status"] == "startup_failed" || w["status"] == "not_run"),
+        "{s}"
+    );
+    let failed = workers
+        .iter()
+        .find(|w| w["status"] == "startup_failed")
+        .unwrap_or_else(|| panic!("no worker is startup_failed: {s}"));
+    let log = PathBuf::from(failed["dir"].as_str().unwrap()).join("emulator.log");
     assert!(
         std::fs::read_to_string(&log)
             .unwrap()
