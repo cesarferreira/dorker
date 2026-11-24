@@ -371,6 +371,26 @@ fn run_credential_helper(helper: &str, registry: &str) -> Option<Credentials> {
     })
 }
 
+/// The GitHub login `gh` is signed in as, if any.
+fn gh_login() -> Option<String> {
+    std::process::Command::new("gh")
+        .args(["api", "user", "--jq", ".login"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+}
+
+/// Where a local image could go on ghcr.io: same name and tag, under `owner`.
+fn suggested_reference(image: &str, owner: Option<&str>) -> String {
+    let (repo, tag) = images::split_tag(&images::normalize_tag(image).unwrap_or(image.into()));
+    let name = repo.rsplit('/').next().unwrap_or(&repo).to_string();
+    format!("ghcr.io/{}/{name}:{tag}", owner.unwrap_or("your-org"))
+}
+
 fn gh_credentials() -> Option<Credentials> {
     let out = std::process::Command::new("gh")
         .args(["auth", "token", "--hostname", "github.com"])
@@ -381,16 +401,7 @@ fn gh_credentials() -> Option<Credentials> {
     if !out.status.success() || secret.is_empty() {
         return None;
     }
-    let user = std::process::Command::new("gh")
-        .args(["api", "user", "--jq", ".login"])
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "dorker".into());
+    let user = gh_login().unwrap_or_else(|| "dorker".into());
     Some(Credentials { user, secret })
 }
 
@@ -1012,8 +1023,8 @@ pub fn push(
     let target = target.unwrap_or(image);
     let r = Reference::parse(target).map_err(cfg)?.ok_or_else(|| {
         cfg(anyhow!(
-            "{target:?} is not a registry reference\n\nName where to push it, e.g.:\n  dorker push {image} ghcr.io/your-org/{}",
-            image.split(':').next().unwrap_or(image).rsplit('/').next().unwrap_or(image)
+            "{target:?} is not a registry reference\n\nName where to push it, e.g.:\n  dorker push {image} {}",
+            suggested_reference(image, gh_login().as_deref())
         ))
     })?;
     let store = Store::open()?;
@@ -1437,6 +1448,18 @@ mod tests {
         assert!(!dead.exists());
         assert!(ours.exists());
         assert!(other.exists());
+    }
+
+    #[test]
+    fn push_suggestions_keep_the_name_and_tag() {
+        assert_eq!(
+            suggested_reference("gearhead:37-dev", Some("cesar")),
+            "ghcr.io/cesar/gearhead:37-dev"
+        );
+        assert_eq!(
+            suggested_reference("team/app", None),
+            "ghcr.io/your-org/app:latest"
+        );
     }
 
     #[test]
