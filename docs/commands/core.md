@@ -37,6 +37,8 @@ Day-to-day commands. Flags for a command are in `dorker <command> --help`. Most 
 | `dorker start t1` | Cold boot a stopped instance. Keeps its data |
 | `dorker rm t1` | Remove an instance and its data. `-f` does not ask |
 | `dorker commit setup -t myapp:ready` | Save a running instance as a new image |
+| `dorker push myapp:ready ghcr.io/org/myapp:v1` | Upload an image to a registry (one entry per CPU architecture under the tag) |
+| `dorker pull ghcr.io/org/myapp:v1` | Download the image for this machine's architecture. `dorker run ghcr.io/org/myapp:v1` pulls it when it is missing |
 
 `dorker ps` warns about an orphan. `--orphans` asks before stopping, because such an emulator may belong to another `DORKER_HOME` that is still using it.
 

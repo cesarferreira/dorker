@@ -7,6 +7,7 @@ home = "/mnt/big-disk/dorker"  # where images and instances are kept
 sdk = "~/Android/Sdk"          # the Android SDK
 gpu = "swiftshader_indirect"   # default GPU mode (a GPU line wins)
 min_free_mb = 8192             # least free disk needed to start work
+tmp = "/var/tmp/dorker"        # scratch space for `dorker push` (default <home>/tmp)
 ```
 
 ```bash
@@ -26,6 +27,7 @@ An environment variable beats the file, and so does a flag or a Dorkerfile line.
 | `sdk` | `ANDROID_HOME` | The Android SDK |
 | `gpu` | | Default GPU mode. A `GPU` line in the Dorkerfile wins. Part of an image's identity, so changing it rebuilds images |
 | `min_free_mb` | `DORKER_MIN_FREE_MB` | Least free disk needed to start work |
+| `tmp` | `DORKER_TMP` | Where `dorker push` packs an image's compressed parts (several GB, removed afterwards, also on Ctrl-C). Default `<home>/tmp`. `push --tmp-dir` wins. Use a fast local disk when `home` is on a network mount |
 
 Installing a missing system image without asking is not settable here: use `--pull` or `DORKER_PULL=1`. Dorkerfile host scripts (`FETCH` and `PROVISION`) run automatically in CLI builds; there is no consent setting.
 

@@ -1,0 +1,59 @@
+# Example GitHub Actions workflow: when the shared Dorkerfile changes on main, build it on
+# Linux and push the x86_64 image to the GitHub Container Registry. Copy it to
+# .github/workflows/ in your own repository and adjust the paths and the image name.
+#
+# It needs a runner with hardware virtualisation (/dev/kvm); GitHub's hosted Ubuntu runners
+# expose it once the udev rule below is applied. GitHub's hosted Apple Silicon runners do
+# not support nested virtualisation, so push the arm64 image from a Mac:
+#   ./publish.sh ghcr.io/<owner>/team-env:<tag>
+# Not yet validated end to end on hosted runners.
+name: Publish the shared emulator image
+
+on:
+  push:
+    branches: [main]
+    paths: [examples/shared-image/Dorkerfile]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write # push to ghcr.io with GITHUB_TOKEN
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: examples/shared-image
+    env:
+      DORKER_HOME: ${{ runner.temp }}/dorker
+      # dorker reads GITHUB_TOKEN (and GITHUB_ACTOR) for ghcr.io.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      IMAGE: ghcr.io/${{ github.repository_owner }}/team-env
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Enable KVM
+        working-directory: .
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install the emulator and the system image
+        run: sdkmanager --install emulator platform-tools "system-images;android-35;google_apis;x86_64"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dorker
+        run: cargo install dorker --locked
+
+      # One tag per change, plus `latest` for whoever wants the newest.
+      - name: Build and push
+        run: |
+          ./publish.sh "$IMAGE:${GITHUB_SHA::12}"
+          dorker push team-env:local "$IMAGE:latest"

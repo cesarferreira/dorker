@@ -13,6 +13,7 @@ mod ls;
 mod mcp;
 mod pool;
 mod prune;
+mod registry;
 mod runtime;
 mod sdk;
 mod skill;
@@ -118,13 +119,32 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Install a system image, e.g. `dorker pull android:35`
+    /// Install a system image (`dorker pull android:35`), or download a shared image from a
+    /// registry (`dorker pull ghcr.io/your-org/gearhead:18.0`)
     Pull {
-        /// Image to install; omit to install the `FROM` image of ./Dorkerfile
+        /// `android:<api>` or `registry/repository[:tag]`; omit to install the `FROM` image of
+        /// ./Dorkerfile
         image: Option<String>,
         /// Dorkerfile to read when no image is given (default: ./Dorkerfile)
         #[arg(short, long)]
         file: Option<std::path::PathBuf>,
+    },
+    /// Upload an image to a registry, e.g. `dorker push myapp:ready ghcr.io/your-org/myapp:ready`.
+    /// Each CPU architecture is stored next to the others under the same tag.
+    Push {
+        /// Local image (tag or id)
+        image: String,
+        /// Where to push it: `registry/repository[:tag]` (default: the image's own name, when
+        /// that is a registry reference)
+        reference: Option<String>,
+        /// Folder for the compressed parts while they upload (several GB; removed afterwards).
+        /// Default: DORKER_TMP, else `tmp` in the config file, else <home>/tmp. Use a fast
+        /// local disk when the store is on a network mount
+        #[arg(long, value_name = "DIR")]
+        tmp_dir: Option<std::path::PathBuf>,
+        /// Print the result as JSON on stdout
+        #[arg(long)]
+        json: bool,
     },
     /// Create a Dorkerfile (and helper files) from a template, here or in a folder
     Init {
@@ -475,7 +495,22 @@ fn run(cli: Cli) -> Result<i32> {
             pull,
         }),
         Command::Versions { api, all, json } => versions::run(api, all, json),
-        Command::Pull { image, file } => commands::pull(image.as_deref(), file.as_deref()),
+        Command::Pull { image, file } => match image
+            .as_deref()
+            .map(registry::Reference::parse)
+            .transpose()
+            .map_err(errors::with(errors::CONFIG))?
+            .flatten()
+        {
+            Some(r) if file.is_none() => registry::pull_cmd(&r),
+            _ => commands::pull(image.as_deref(), file.as_deref()),
+        },
+        Command::Push {
+            image,
+            reference,
+            tmp_dir,
+            json,
+        } => registry::push(&image, reference.as_deref(), tmp_dir.as_deref(), json),
         Command::Init {
             template,
             dir,

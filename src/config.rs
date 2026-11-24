@@ -19,6 +19,7 @@ struct RawFile {
     sdk: Option<String>,
     gpu: Option<String>,
     min_free_mb: Option<u64>,
+    tmp: Option<String>,
 }
 
 /// The validated settings.
@@ -32,6 +33,8 @@ pub struct Config {
     pub gpu: Option<String>,
     /// Refuse to start work with less free disk than this many MB.
     pub min_free_mb: Option<u64>,
+    /// Where `dorker push` writes its compressed parts (default: `<home>/tmp`).
+    pub tmp: Option<PathBuf>,
 }
 
 /// `~` and `~/x` mean the home directory. Anything else must already be absolute.
@@ -76,6 +79,11 @@ pub fn parse(text: &str, home: Option<&Path>) -> Result<Config> {
             .transpose()?,
         gpu: raw.gpu,
         min_free_mb: raw.min_free_mb,
+        tmp: raw
+            .tmp
+            .as_deref()
+            .map(|p| expand_path(p, home, "tmp"))
+            .transpose()?,
     })
 }
 
@@ -118,6 +126,7 @@ pub fn get() -> Result<&'static Config> {
             sdk: None,
             gpu: None,
             min_free_mb: None,
+            tmp: None,
         };
         Ok(&EMPTY)
     }
@@ -158,6 +167,11 @@ pub const EXAMPLE: &str = r#"# dorker configuration. Every setting is optional, 
 # Refuse to start work with less free disk than this many MB. Default: 2048.
 # Also settable with DORKER_MIN_FREE_MB.
 # min_free_mb = 2048
+
+# Scratch space for `dorker push`, which packs an image into compressed parts (GBs) before
+# uploading them. Default: <home>/tmp. Point it at a fast local disk when `home` is on a
+# network mount. Also settable with DORKER_TMP, or `dorker push --tmp-dir`.
+# tmp = "/var/tmp/dorker"
 "#;
 
 /// One effective setting: its value and where that value came from.
@@ -221,6 +235,21 @@ fn rows(cfg: &Config) -> Vec<Row> {
         ("2048".to_string(), "default")
     };
 
+    let (tmp, tmp_source) =
+        if let Some(v) = std::env::var_os("DORKER_TMP").filter(|v| !v.is_empty()) {
+            (PathBuf::from(v).display().to_string(), "DORKER_TMP")
+        } else if let Some(t) = &cfg.tmp {
+            (t.display().to_string(), "config file")
+        } else {
+            (
+                crate::store::default_root().map_or_else(
+                    |e| format!("({e})"),
+                    |p| p.join("tmp").display().to_string(),
+                ),
+                "default (<home>/tmp)",
+            )
+        };
+
     vec![
         Row {
             name: "home",
@@ -241,6 +270,11 @@ fn rows(cfg: &Config) -> Vec<Row> {
             name: "min_free_mb",
             value: free,
             source: free_source.into(),
+        },
+        Row {
+            name: "tmp",
+            value: tmp,
+            source: tmp_source.into(),
         },
     ]
 }
@@ -354,7 +388,7 @@ mod tests {
     #[test]
     fn every_setting_parses_and_tilde_expands() {
         let c = parse(
-            "home = \"~/dorker\"\nsdk = \"/opt/sdk\"\ngpu = \"host\"\nmin_free_mb = 4096 # more\n",
+            "home = \"~/dorker\"\nsdk = \"/opt/sdk\"\ngpu = \"host\"\nmin_free_mb = 4096 # more\ntmp = \"/var/tmp/d\"\n",
             home(),
         )
         .unwrap();
@@ -362,6 +396,7 @@ mod tests {
         assert_eq!(c.sdk, Some(PathBuf::from("/opt/sdk")));
         assert_eq!(c.gpu.as_deref(), Some("host"));
         assert_eq!(c.min_free_mb, Some(4096));
+        assert_eq!(c.tmp, Some(PathBuf::from("/var/tmp/d")));
         assert_eq!(
             parse("home = \"~\"", home()).unwrap().home,
             Some(PathBuf::from("/home/u"))
@@ -375,6 +410,7 @@ mod tests {
         assert!(msg("gpu = \"fast\"").contains("swiftshader_indirect"));
         assert!(msg("home = \"relative/dir\"").contains("absolute"));
         assert!(msg("home = \"\"").contains("empty"));
+        assert!(msg("tmp = \"rel\"").contains("absolute"));
         assert!(msg("min_free_mb = 0").contains("at least 1"));
         assert!(
             msg("min_free_mb = \"lots\"").contains("min_free_mb")
@@ -401,5 +437,6 @@ mod tests {
             .join("\n");
         let c = parse(&live, home()).unwrap();
         assert!(c.home.is_some() && c.sdk.is_some() && c.gpu.is_some() && c.min_free_mb.is_some());
+        assert!(c.tmp.is_some());
     }
 }

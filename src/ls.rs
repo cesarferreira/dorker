@@ -342,6 +342,7 @@ mod tests {
             launch: None,
             created_at: NOW - used_ago - 100,
             last_used: Some(NOW - used_ago),
+            source: None,
         }
     }
 

@@ -439,6 +439,7 @@ mod tests {
             launch: None,
             created_at: now - last_used_ago - 1000,
             last_used: Some(now - last_used_ago),
+            source: None,
         }
     }
 

@@ -89,6 +89,7 @@ pub fn run(instance: &str, tag: Option<&str>, json: bool) -> Result<i32> {
                 launch: None,
                 created_at: now,
                 last_used: None,
+                source: None,
             }
         }
     };
@@ -98,6 +99,7 @@ pub fn run(instance: &str, tag: Option<&str>, json: bool) -> Result<i32> {
     meta.snapshot = Some(snapshot.clone());
     meta.created_at = now;
     meta.last_used = None;
+    meta.source = None;
     // The new snapshot is of this instance's running state, so its hardware must match.
     meta.memory_mb = inst.memory_mb;
     meta.cpus = inst.cpus;
@@ -198,7 +200,7 @@ pub fn run(instance: &str, tag: Option<&str>, json: bool) -> Result<i32> {
 }
 
 /// Delete `*.lock` files (emulator and hardware locks) anywhere under `dir`.
-fn remove_locks(dir: &std::path::Path) {
+pub(crate) fn remove_locks(dir: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
