@@ -29,7 +29,7 @@ By default it removes only images with no tag that no instance was made from. Ta
 ## Stop everything
 
 ```bash
-dorker stop --all      # every running instance
+dorker stop            # every running instance (same as --all)
 dorker stop --orphans  # emulators dorker lost track of
 ```
 

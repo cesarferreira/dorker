@@ -1917,8 +1917,15 @@ fn stop_all_and_orphans_stop_what_dorker_started() {
     // Nothing running: still fine.
     assert_eq!(code(&f.run(&["stop", "--all"])), 0);
 
-    // With no instance and no flag, `stop` is a usage error.
-    assert_eq!(code(&f.run(&["stop"])), 2);
+    // With no instance and no flag, `stop` stops every running instance, like --all.
+    assert_eq!(
+        code(&f.run(&["run", "-d", "--name", "bare", "android:35"])),
+        0
+    );
+    let bare = f.run(&["stop"]);
+    assert_eq!(code(&bare), 0, "{}", text(&bare.stderr));
+    assert_eq!(text(&bare.stdout).trim(), "bare");
+    wait_until("emulators to exit", || f.live_emulators().is_empty());
 
     // An emulator whose instance record is gone is an orphan: reported, and only stopped
     // when asked (and confirmed).

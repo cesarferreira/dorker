@@ -346,9 +346,9 @@ enum Command {
     },
     /// Stop a running instance
     Stop {
-        #[arg(required_unless_present_any = ["all", "orphans"])]
+        /// Instances to stop; none stops every running instance (like --all)
         instances: Vec<String>,
-        /// Stop every running instance
+        /// Stop every running instance (the default when no instance is named)
         #[arg(long, conflicts_with = "instances")]
         all: bool,
         /// Also stop emulators dorker started that have no instance record (they may belong
@@ -612,8 +612,8 @@ fn run(cli: Cli) -> Result<i32> {
             orphans,
             yes,
         } => {
-            if all || orphans {
-                commands::stop_all(all, orphans, yes)
+            if all || orphans || instances.is_empty() {
+                commands::stop_all(all || instances.is_empty(), orphans, yes)
             } else {
                 commands::each(&instances, commands::stop)
             }

@@ -25,7 +25,7 @@ Docker for headless Android emulators. A `Dorkerfile` is built once into an immu
 | Instrumentation tests | `dorker test t1 --runner <pkg.test>/androidx.test.runner.AndroidJUnitRunner` |
 | Parallel shards | `dorker test --image myapp:ci --workers 4 --runner ...` |
 | Save hand-made device state | `dorker commit t1 -t myapp:ready` |
-| Stop / delete | `dorker stop t1`, `dorker rm -f t1`, `dorker stop --all` |
+| Stop / delete | `dorker stop t1`, `dorker rm -f t1`, `dorker stop` (all running) |
 | Disk | `dorker ls`, `dorker prune --dry-run` |
 
 Most commands take `--json`. `-v` (or `DORKER_VERBOSE=1`) prints what dorker decides and runs, on stderr.

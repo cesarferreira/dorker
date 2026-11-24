@@ -32,7 +32,7 @@ Day-to-day commands. Flags for a command are in `dorker <command> --help`. Most 
 | `dorker screenshot t1 shot.png` | Capture a PNG. Waits up to 10s for a non-blank frame |
 | `dorker logs t1` | Show logcat. Add `-f` to follow |
 | `dorker stop t1` | Stop one instance |
-| `dorker stop --all` | Stop every running instance |
+| `dorker stop` | Stop every running instance (same as `--all`) |
 | `dorker stop --orphans` | Stop emulators dorker lost track of (asks first; `--yes` skips the question) |
 | `dorker start t1` | Cold boot a stopped instance. Keeps its data |
 | `dorker rm t1` | Remove an instance and its data. `-f` does not ask |

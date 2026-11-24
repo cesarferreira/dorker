@@ -361,7 +361,7 @@ leftovers of interrupted builds. A removed image is simply rebuilt the next time
 ### Stop everything
 
 ```bash
-dorker stop --all      # every running instance
+dorker stop            # every running instance (same as --all)
 dorker stop --orphans  # emulators dorker lost track of
 ```
 
