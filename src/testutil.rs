@@ -157,6 +157,7 @@ impl FakeSdk {
             launch: None,
             created_at: crate::store::now_secs(),
             last_used: None,
+            source: None,
         };
         let home = crate::images::avd_home(&store, &id);
         std::fs::create_dir_all(home.join("dorker.avd")).unwrap();

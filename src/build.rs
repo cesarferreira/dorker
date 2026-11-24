@@ -367,6 +367,7 @@ pub fn build_image(a: &BuildArgs) -> Result<ImageMeta> {
         launch,
         created_at: now_secs(),
         last_used: None,
+        source: None,
     };
 
     let cached = !a.no_cache && images::image_dir(&store, &id).join("image.json").is_file();

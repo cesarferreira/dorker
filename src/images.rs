@@ -41,6 +41,9 @@ pub struct ImageMeta {
     /// `None` for images made before this was tracked: `last_used_or_created` falls back.
     #[serde(default)]
     pub last_used: Option<u64>,
+    /// Where a pulled image came from: `registry/repository:tag@sha256:...`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 impl ImageMeta {
@@ -94,10 +97,21 @@ pub fn list(store: &Store) -> Result<Vec<ImageMeta>> {
 
 /// Normalise `repo` to `repo:latest` and validate the syntax.
 pub fn normalize_tag(input: &str) -> Result<String> {
-    let (repo, tag) = input.split_once(':').unwrap_or((input, "latest"));
+    // The tag follows the last `:` after the last `/`, so a registry port
+    // (`localhost:5000/team/app:tag`) is part of the repository.
+    let (repo, tag) = match input.rsplit_once(':') {
+        Some((r, t)) if !t.contains('/') => (r, t),
+        _ => (input, "latest"),
+    };
+    // A `:` in the repository is only allowed in a registry host (`localhost:5000/...`).
+    let host_port = repo
+        .split_once('/')
+        .map_or(0, |(host, _)| host.matches(':').count());
     let repo_ok = !repo.is_empty()
+        && repo.matches(':').count() == host_port
+        && host_port <= 1
         && repo.chars().all(|c| {
-            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-' | '/')
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-' | '/' | ':')
         });
     let tag_ok = !tag.is_empty()
         && tag
@@ -107,6 +121,14 @@ pub fn normalize_tag(input: &str) -> Result<String> {
         bail!("invalid image name {input:?}: use lowercase `repository[:tag]`");
     }
     Ok(format!("{repo}:{tag}"))
+}
+
+/// Split a normalised `repo:tag` into its parts (the tag follows the last `:`).
+pub fn split_tag(tag: &str) -> (String, String) {
+    match tag.rsplit_once(':') {
+        Some((r, t)) if !t.contains('/') => (r.to_string(), t.to_string()),
+        _ => (tag.to_string(), "latest".to_string()),
+    }
 }
 
 /// Find by `repo[:tag]` or by (prefix of) image id.
@@ -287,6 +309,7 @@ mod tests {
             launch: None,
             created_at: 1,
             last_used: None,
+            source: None,
         }
     }
 
@@ -301,6 +324,20 @@ mod tests {
         assert_eq!(normalize_tag("org/myapp:v1.2").unwrap(), "org/myapp:v1.2");
         assert!(normalize_tag("MyApp").is_err());
         assert!(normalize_tag("a:b:c").is_err());
+        // A registry port belongs to the repository.
+        assert_eq!(
+            normalize_tag("localhost:5000/team/aa").unwrap(),
+            "localhost:5000/team/aa:latest"
+        );
+        assert_eq!(
+            normalize_tag("localhost:5000/team/aa:v1").unwrap(),
+            "localhost:5000/team/aa:v1"
+        );
+        assert!(normalize_tag("a/b:c/d:e").is_err());
+        assert_eq!(
+            split_tag("localhost:5000/team/aa:v1"),
+            ("localhost:5000/team/aa".to_string(), "v1".to_string())
+        );
         assert!(normalize_tag("").is_err());
     }
 

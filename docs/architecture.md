@@ -10,6 +10,7 @@ itself. One crate, synchronous, no daemon.
 | `main.rs` | clap CLI surface and dispatch |
 | `commands.rs` | `run`, `start`, `pull`, `ps`, `exec`, `install`, `screenshot`, `logs`, `stop` (`--all`, `--orphans`), `rm`, `images`, `rmi`; the pull-on-demand policy |
 | `commit.rs` | `dorker commit`: save a running instance as an image |
+| `registry.rs` | `dorker push` / `dorker pull <registry ref>`: OCI registry client, auth, tar+zstd parts, per-architecture index |
 | `config.rs` | the optional config file (`home`, `sdk`, `gpu`, `min_free_mb`) and `dorker config` |
 | `templates.rs` | `dorker templates` / `dorker init --template`; the folders under `templates/` are embedded by the root `build.rs` |
 | `doctor.rs` | host checks with remediation (`--json`) |
@@ -178,7 +179,8 @@ Transitions are validated by `State::can_become`.
 ├── instances/<id>/avd/           an image clone, or a fresh AVD (+ userdata)
 ├── instances/<id>/emulator.log
 ├── instances/<id>/test-*/        `dorker test` logs (die with the instance)
-├── images/.<id>.partial/         a build or commit in progress (prune clears)
+├── images/.<id>.partial/         a build, commit or pull in progress (prune clears)
+├── tmp/push-<id>-<pid>/          compressed parts of a push in progress (or under `tmp` / DORKER_TMP)
 ├── runs/<run-id>/manifest.json   a worker pool's owner and resource claim
 ├── results/<run-id>/             `dorker test --image` reports (without --out)
 ├── locks/create.lock             holds the holder's pid

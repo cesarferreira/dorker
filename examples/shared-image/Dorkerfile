@@ -1,0 +1,27 @@
+# The shared environment: everything every developer needs on the device, except the app they
+# are working on (each one installs their own build on top).
+#
+# Build it once per CPU architecture and push it (./publish.sh). Everyone else runs it by its
+# registry name (./dev.sh) and gets the same device, settings and snapshot.
+#
+# For a real environment, add what your team needs: INSTALL the apps you depend on, FETCH
+# what you do not commit, PROVISION setup that needs the device. The android-auto-with-dev-mode
+# template (`dorker init --template android-auto-with-dev-mode`) is a complete example.
+FROM android:35
+
+MEMORY 2GB
+CPUS 2
+DISK 4GB
+
+DEVICE pixel_7
+HEADLESS true
+
+# Turn off animations: faster, less flaky UI tests.
+SETTING window_animation_scale 0
+SETTING transition_animation_scale 0
+SETTING animator_duration_scale 0
+# Keep the screen on while plugged in (USB, AC and wireless), so screenshots are never black.
+SETTING stay_on_while_plugged_in 7
+
+# The snapshot is what makes a pulled image start in seconds.
+SNAPSHOT ready

@@ -459,6 +459,13 @@ pub fn run_target(
                 "-f/--file only applies when no image is given (it names the Dorkerfile to run)"
             )));
         }
+        // Like `docker run`: a registry image that is not here yet is pulled first.
+        if let Some(r) = crate::registry::Reference::parse(&image).map_err(cfg)? {
+            if crate::images::find(&Store::open()?, &r.local_tag()).is_err() {
+                return crate::registry::pull(&r);
+            }
+            return Ok(r.local_tag());
+        }
         return Ok(image);
     }
     let path = file.map_or_else(|| PathBuf::from("Dorkerfile"), Path::to_path_buf);
@@ -637,10 +644,27 @@ pub fn images(json: bool) -> Result<i32> {
         return Ok(0);
     }
     let st = crate::style::Style::stdout();
+    // Registry names (ghcr.io/org/name) are long: widen the columns to fit them.
+    let split: Vec<(String, String)> = list
+        .iter()
+        .flat_map(|m| m.tags.iter().map(|t| images::split_tag(t)))
+        .collect();
+    let repo_w = split
+        .iter()
+        .map(|(r, _)| r.len() + 2)
+        .max()
+        .unwrap_or(0)
+        .max(22);
+    let tag_w = split
+        .iter()
+        .map(|(_, t)| t.len() + 2)
+        .max()
+        .unwrap_or(0)
+        .max(12);
     println!(
         "{}",
         st.dim(&format!(
-            "{:<22}{:<12}{:<14}{:<9}{:<10}SIZE (disk / logical)",
+            "{:<repo_w$}{:<tag_w$}{:<14}{:<9}{:<10}SIZE (disk / logical)",
             "REPOSITORY", "TAG", "IMAGE ID", "ANDROID", "SNAPSHOT"
         ))
     );
@@ -651,18 +675,11 @@ pub fn images(json: bool) -> Result<i32> {
         let tags: Vec<(String, String)> = if m.tags.is_empty() {
             vec![("<none>".into(), "<none>".into())]
         } else {
-            m.tags
-                .iter()
-                .map(|t| {
-                    t.split_once(':')
-                        .map(|(r, t)| (r.to_string(), t.to_string()))
-                        .unwrap_or((t.clone(), "latest".into()))
-                })
-                .collect()
+            m.tags.iter().map(|t| images::split_tag(t)).collect()
         };
         for (repo, tag) in tags {
             let untagged = repo == "<none>";
-            let (repo, tag) = (format!("{repo:<22}"), format!("{tag:<12}"));
+            let (repo, tag) = (format!("{repo:<repo_w$}"), format!("{tag:<tag_w$}"));
             let (repo, tag) = if untagged {
                 (st.dim(&repo), st.dim(&tag))
             } else {

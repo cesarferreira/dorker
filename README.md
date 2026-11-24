@@ -296,6 +296,23 @@ copied) and copies it into the image store, so `dorker start setup` still brings
 instance back with its data. A new instance restores the saved snapshot in a few seconds,
 with the app state that was on screen.
 
+### Share images with your team
+
+Build an environment once and give everyone the same image, through any OCI registry
+(GitHub Container Registry, a self-hosted `registry:2`, ECR, ...):
+
+```bash
+dorker push gearhead:ready ghcr.io/your-org/gearhead:18.0   # on the machine that built it
+dorker run -d --name dev ghcr.io/your-org/gearhead:18.0     # anyone else: pulls, then runs
+```
+
+Only the image's userdata and snapshot are sent; each machine gets the Android system image
+from Google's SDK. Push from an Apple Silicon Mac and from Linux to the same tag, and each
+`pull` picks the image for its own CPU. For ghcr.io, dorker uses `gh auth token` (needs
+`read:packages` / `write:packages`), `docker login`, or `DORKER_REGISTRY_TOKEN`. A complete
+example lives in [examples/shared-image](examples/shared-image); details in
+[docs/workflows/sharing.md](docs/workflows/sharing.md).
+
 ### Configuration
 
 Settings that differ between machines (a Mac and a Linux box, say) go in
@@ -307,10 +324,11 @@ home = "/mnt/big-disk/dorker"  # where images and instances are kept
 sdk = "~/Android/Sdk"          # the Android SDK
 gpu = "swiftshader_indirect"   # default GPU mode (a GPU line wins)
 min_free_mb = 8192             # least free disk needed to start work
+tmp = "/var/tmp/dorker"        # scratch space for `dorker push` (default <home>/tmp)
 ```
 
 An environment variable beats the file (`DORKER_HOME`, `ANDROID_HOME`,
-`DORKER_MIN_FREE_MB`), and so does a flag or a Dorkerfile line. `dorker config` shows
+`DORKER_MIN_FREE_MB`, `DORKER_TMP`), and so does a flag or a Dorkerfile line. `dorker config` shows
 each setting in effect and where it came from, `dorker config init` writes a commented
 example, and a mistake in the file is an error that names it. `gpu` is part of an image's
 identity, so changing it rebuilds images. Installing a missing system image without asking

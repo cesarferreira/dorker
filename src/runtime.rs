@@ -17,8 +17,36 @@ pub const AVD_NAME: &str = "dorker";
 /// Set by Ctrl-C; long operations poll it and clean up.
 pub static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Folders to delete if the process is interrupted (a push's packed parts, a pull's partial
+/// image). While any is registered, Ctrl-C or SIGTERM deletes them and exits with 130.
+static CLEANUP: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+
 pub fn install_interrupt_handler() {
-    let _ = ctrlc::set_handler(|| INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst));
+    let _ = ctrlc::set_handler(|| {
+        INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
+        let paths = CLEANUP.lock().map(|g| g.clone()).unwrap_or_default();
+        if !paths.is_empty() {
+            for p in &paths {
+                let _ = std::fs::remove_dir_all(p);
+            }
+            eprintln!("\ninterrupted; removed temporary files");
+            std::process::exit(130);
+        }
+    });
+}
+
+/// Delete `path` if the process is interrupted, until [`forget_on_interrupt`] is called.
+pub fn remove_on_interrupt(path: &std::path::Path) {
+    install_interrupt_handler();
+    if let Ok(mut g) = CLEANUP.lock() {
+        g.push(path.to_path_buf());
+    }
+}
+
+pub fn forget_on_interrupt(path: &std::path::Path) {
+    if let Ok(mut g) = CLEANUP.lock() {
+        g.retain(|p| p != path);
+    }
 }
 
 pub fn interrupted() -> bool {
@@ -79,7 +107,7 @@ pub fn write_avd(store: &Store, inst: &Instance, image: &SystemImage) -> Result<
     write_avd_ini(&home, image.api)
 }
 
-fn write_avd_ini(home: &Path, api: u32) -> Result<()> {
+pub fn write_avd_ini(home: &Path, api: u32) -> Result<()> {
     std::fs::write(
         home.join(format!("{AVD_NAME}.ini")),
         format!(

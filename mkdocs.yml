@@ -63,6 +63,7 @@ nav:
   - Workflows:
       - Build and Run: workflows/build-and-run.md
       - Templates: templates.md
+      - Share Images: workflows/sharing.md
       - Testing: workflows/testing.md
       - Disk and Cleanup: workflows/disk.md
       - AI Agents: mcp.md
