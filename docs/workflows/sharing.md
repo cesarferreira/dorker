@@ -6,13 +6,13 @@ the same apps and versions, the same settings, the same snapshot. Nobody repeats
 ```bash
 # Once, on the machine that builds it
 dorker build -t gearhead:ready .
-dorker push gearhead:ready ghcr.io/your-org/gearhead:18.0
+dorker push gearhead:ready ghcr.io/your-org/gearhead:37-aa18.0
 
 # Everyone else
-dorker run -d --name dev ghcr.io/your-org/gearhead:18.0   # pulls it the first time
+dorker run -d --name dev ghcr.io/your-org/gearhead:37-aa18.0   # pulls it the first time
 ```
 
-`dorker pull ghcr.io/your-org/gearhead:18.0` downloads it without starting anything, and
+`dorker pull ghcr.io/your-org/gearhead:37-aa18.0` downloads it without starting anything, and
 checks for a newer push of that tag. `dorker run` uses the local copy once it has one, like
 `docker run`.
 
@@ -44,9 +44,9 @@ on Linux. Build the same Dorkerfile on each and push both to the same tag:
 
 ```bash
 # On a Mac
-dorker build -t gearhead:ready . && dorker push gearhead:ready ghcr.io/your-org/gearhead:18.0
+dorker build -t gearhead:ready . && dorker push gearhead:ready ghcr.io/your-org/gearhead:37-aa18.0
 # On Linux (or Linux CI)
-dorker build -t gearhead:ready . && dorker push gearhead:ready ghcr.io/your-org/gearhead:18.0
+dorker build -t gearhead:ready . && dorker push gearhead:ready ghcr.io/your-org/gearhead:37-aa18.0
 ```
 
 The tag points to an index with one entry per architecture. A push replaces only its own
@@ -77,12 +77,12 @@ gh auth refresh -s write:packages
 
 ## Versioning
 
-Use one tag per version of what the image contains, and move a `latest` tag when you
+Use one tag per version of what the image contains, and move a shorter tag when you
 upgrade:
 
 ```bash
-dorker push gearhead:ready ghcr.io/your-org/gearhead:18.1
-dorker push gearhead:ready ghcr.io/your-org/gearhead:latest
+dorker push gearhead:ready ghcr.io/your-org/gearhead:37-aa18.1
+dorker push gearhead:ready ghcr.io/your-org/gearhead:37
 ```
 
 Older tags stay available, so a regression can be checked against the previous version.

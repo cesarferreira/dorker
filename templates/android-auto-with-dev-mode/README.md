@@ -53,7 +53,8 @@ adb -s emulator-5554 shell am start \
 then scroll to the bottom and tap **Version** about 10 times, choose **OK** in the "Allow
 development settings?" dialog, open the **&#8942;** menu and choose **Start head unit server**.
 
-Checked on an Apple Silicon Mac with `android:36-playstore` and Android Auto 17.9.
+Checked on an Apple Silicon Mac with `android:36-playstore` and Android Auto 17.9, and on
+x86_64 Linux with `android:37-playstore` and Android Auto 18.0.
 
 Notes:
 
@@ -61,10 +62,14 @@ Notes:
   Android Auto *stub* signed with the AOSP test key, and the real app (signed by Google)
   cannot replace it: `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. The Play Store image's stub is
   signed by Google, so the update installs.
-- The bundle from apkeep is for **arm64** (it has `config.arm64_v8a.apk`), so it installs on
-  Apple Silicon. On an x86_64 Linux host you need an x86_64 bundle instead.
+- The bundle from apkeep is for **arm64** (it has `config.arm64_v8a.apk`). It installs on
+  Apple Silicon, and also on x86_64 Linux with `android:37-playstore`, whose system image
+  translates arm64 code.
 - The `google_apis` image already has Google Play services, which Android Auto needs.
   Installing the app does not connect a car: use Android Auto's developer mode and a head
   unit (or the Desktop Head Unit) for that.
 - The `.xapk` is not committed (Google's app, version changes). Check that your use of it
   complies with its terms.
+
+To give your team this exact image on Mac and Linux, see
+[Share images with your team](../../README.md#share-images-with-your-team).

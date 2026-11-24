@@ -299,18 +299,71 @@ with the app state that was on screen.
 ### Share images with your team
 
 Build an environment once and give everyone the same image, through any OCI registry
-(GitHub Container Registry, a self-hosted `registry:2`, ECR, ...):
+(GitHub Container Registry, a self-hosted `registry:2`, ECR, ...). Only the image's
+userdata and snapshot are sent; each machine gets the Android system image from Google's
+SDK. An image runs only on the CPU it was built for, so build it once on an Apple Silicon
+Mac and once on Linux, and push both to the same tag: `pull` and `run` pick the one for
+the machine they run on.
+
+The example below shares the [Android Auto template](templates/android-auto-with-dev-mode)
+(API 37 Play Store, Android Auto with developer mode and the head unit server on) as
+`ghcr.io/your-org/gearhead:<api>-aa<version>`. Keep the API level and app version in the
+tag, not the name: on ghcr.io each name is one package with its own access settings, so
+one `gearhead` package covers every version.
+
+**1. Log in** (once per machine). dorker uses the GitHub CLI's token:
 
 ```bash
-dorker push gearhead:ready ghcr.io/your-org/gearhead:18.0   # on the machine that built it
-dorker run -d --name dev ghcr.io/your-org/gearhead:18.0     # anyone else: pulls, then runs
+gh auth refresh -s write:packages   # to push; teammates who only pull need read:packages
 ```
 
-Only the image's userdata and snapshot are sent; each machine gets the Android system image
-from Google's SDK. Push from an Apple Silicon Mac and from Linux to the same tag, and each
-`pull` picks the image for its own CPU. For ghcr.io, dorker uses `gh auth token` (needs
-`read:packages` / `write:packages`), `docker login`, or `DORKER_REGISTRY_TOKEN`. A complete
-example lives in [examples/shared-image](examples/shared-image); details in
+**2. Build and push on Linux (x86_64)**
+
+```bash
+cargo install apkeep                # once: downloads the Android Auto app
+dorker init --template android-auto-with-dev-mode gearhead && cd gearhead
+sed -i 's/^FROM .*/FROM android:37-playstore/' Dorkerfile
+dorker build -t gearhead:local .    # downloads Android Auto, enables developer mode, snapshots
+dorker push gearhead:local ghcr.io/your-org/gearhead:37-aa18.0
+dorker push gearhead:local ghcr.io/your-org/gearhead:37    # moves to the newest version
+```
+
+**3. Build and push on an Apple Silicon Mac (arm64)**, with the same Dorkerfile and the
+same `.xapk` (copy `com.google.android.projection.gearhead.xapk` from the Linux build, so
+both have the same Android Auto version):
+
+```bash
+dorker init --template android-auto-with-dev-mode gearhead && cd gearhead
+sed -i '' 's/^FROM .*/FROM android:37-playstore/' Dorkerfile
+cp /path/from/linux/com.google.android.projection.gearhead.xapk .
+dorker build -t gearhead:local .
+dorker push gearhead:local ghcr.io/your-org/gearhead:37-aa18.0
+dorker push gearhead:local ghcr.io/your-org/gearhead:37
+```
+
+Each push adds its own architecture to the tag and keeps the other one, and the second push
+of the same image uploads nothing again. Until both are pushed, a machine of the missing
+architecture gets an error that names the architectures the tag has.
+
+**4. Pull and run, on either machine.** The command is the same on a Mac and on Linux:
+
+```bash
+gh auth refresh -s read:packages                                  # once
+dorker run -d --name aa ghcr.io/your-org/gearhead:37-aa18.0       # pulls the first time
+dorker exec aa "netstat -tln | grep 5277"                         # head unit server is up
+adb -s "$(dorker ps | awk '$2 == "aa" { print $5 }')" forward tcp:5277 tcp:5277   # for a head unit (DHU, openDHU)
+```
+
+The first run downloads about 2.4 GB (3.5 GB unpacked); later runs use the local copy and
+restore the snapshot in a few seconds. `dorker pull ghcr.io/your-org/gearhead:37` fetches a
+newer push of a moving tag. A snapshot restores only on the emulator version that saved it;
+on another version the image cold boots (about a minute) with the same data, and `pull`
+says so.
+
+When Android Auto 18.1 ships, delete the `.xapk`, repeat steps 2 and 3 with
+`:37-aa18.1` (and `:37`), and keep `:37-aa18.0` for comparison. Credentials can also come
+from `docker login` or `DORKER_REGISTRY_TOKEN`; a complete example lives in
+[examples/shared-image](examples/shared-image), details in
 [docs/workflows/sharing.md](docs/workflows/sharing.md).
 
 ### Configuration
