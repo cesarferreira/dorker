@@ -1029,10 +1029,24 @@ pub fn ps(all: bool, json: bool) -> Result<i32> {
         return Ok(0);
     }
     let st = crate::style::Style::stdout();
+    // Long names (registry images, generated instance names) widen their column, so the
+    // columns stay separated and `awk '{ print $5 }'` keeps working.
+    let name_w = list
+        .iter()
+        .map(|i| i.name.len() + 2)
+        .max()
+        .unwrap_or(0)
+        .max(20);
+    let image_w = list
+        .iter()
+        .map(|i| i.image.len() + 2)
+        .max()
+        .unwrap_or(0)
+        .max(22);
     println!(
         "{}",
         st.dim(&format!(
-            "{:<14}{:<20}{:<22}{:<10}ADB",
+            "{:<14}{:<name_w$}{:<image_w$}{:<10}ADB",
             "ID", "NAME", "IMAGE", "STATUS"
         ))
     );
@@ -1043,9 +1057,9 @@ pub fn ps(all: bool, json: bool) -> Result<i32> {
             "-".into()
         };
         println!(
-            "{}{}{:<22}{}{}",
+            "{}{}{:<image_w$}{}{}",
             st.cyan(&format!("{:<14}", &i.id[..12.min(i.id.len())])),
-            st.bold(&format!("{:<20}", i.name)),
+            st.bold(&format!("{:<name_w$}", i.name)),
             i.image,
             st.status(i.state.as_str(), &format!("{:<10}", i.state.as_str())),
             adb

@@ -1891,6 +1891,32 @@ fn provision_scripts_run_once_per_build_and_are_part_of_the_cache_key() {
 }
 
 #[test]
+fn ps_keeps_columns_apart_for_long_image_and_instance_names() {
+    let _guard = serial();
+    let f = Fake::new("pswide", true);
+    let image = "ghcr.io/some-org/android-37-gearhead-18:latest";
+    build_image(&f, "wide", "", Some(image));
+    let name = "a-generated-instance-name-12345";
+    let run = f.run(&["run", "-d", "--name", name, image]);
+    assert_eq!(code(&run), 0, "{}", text(&run.stderr));
+
+    let ps = f.run(&["ps"]);
+    let out = text(&ps.stdout);
+    let row: Vec<&str> = out
+        .lines()
+        .find(|l| l.contains(name))
+        .unwrap_or_else(|| panic!("no row for {name}: {out}"))
+        .split_whitespace()
+        .collect();
+    assert_eq!(row.len(), 5, "{out}");
+    assert_eq!(row[1], name);
+    assert_eq!(row[2], image);
+    assert_eq!(row[3], "READY");
+    assert!(row[4].starts_with("emulator-"), "{out}");
+    assert_eq!(code(&f.run(&["rm", "-f", name])), 0);
+}
+
+#[test]
 fn stop_all_and_orphans_stop_what_dorker_started() {
     let _guard = serial();
     let f = Fake::new("stopall", true);
