@@ -783,6 +783,11 @@ pub fn pack(src: &Path, out: &Path, part_size: u64) -> Result<(Vec<Part>, u64)> 
     enc.include_checksum(true)?;
     let mut tar = tar::Builder::new(enc);
     tar.follow_symlinks(false);
+    // Store zeros as data, not as holes found on disk: where a file has holes depends on how
+    // the filesystem allocated it (preallocation it later releases, copies, reflinks), so the
+    // same content would pack differently and a re-push would upload every part again. zstd
+    // compresses the zeros to almost nothing, and `unpack` writes them back as holes.
+    tar.sparse(false);
     let mut unpacked = 0u64;
     add_dir(&mut tar, src, Path::new(""), &mut unpacked)?;
     let enc = tar.into_inner().context("finishing the archive")?;
@@ -1541,6 +1546,43 @@ mod tests {
             docker_credentials_from(cfg, "x.io", &helper).unwrap().user,
             "osxkeychain"
         );
+    }
+
+    #[test]
+    fn pack_depends_on_content_not_on_how_the_file_is_allocated() {
+        let d = Dir::new();
+        let src = d.path().join("avd");
+        fs::create_dir_all(&src).unwrap();
+        let img = src.join("userdata.img");
+        let size = 4 * 1024 * 1024u64;
+        let data_at = 3 * 1024 * 1024u64;
+        // First a file with a hole on disk...
+        {
+            let mut f = File::create(&img).unwrap();
+            f.set_len(size).unwrap();
+            f.seek(SeekFrom::Start(data_at)).unwrap();
+            f.write_all(b"payload").unwrap();
+        }
+        let mtime = fs::metadata(&img).unwrap().modified().unwrap();
+        let pack_digests = |name: &str| {
+            let out = d.path().join(name);
+            fs::create_dir_all(&out).unwrap();
+            let (parts, _) = pack(&src, &out, 64 * 1024).unwrap();
+            parts.into_iter().map(|p| p.digest).collect::<Vec<_>>()
+        };
+        let holey = pack_digests("out-holey");
+
+        // ...then the same bytes written out in full, with the same modification time.
+        let mut dense = vec![0u8; size as usize];
+        dense[data_at as usize..data_at as usize + 7].copy_from_slice(b"payload");
+        {
+            let mut f = fs::OpenOptions::new().write(true).open(&img).unwrap();
+            f.write_all(&dense).unwrap();
+            f.set_times(fs::FileTimes::new().set_modified(mtime))
+                .unwrap();
+        }
+        assert_eq!(fs::read(&img).unwrap(), dense);
+        assert_eq!(holey, pack_digests("out-dense"));
     }
 
     #[test]
