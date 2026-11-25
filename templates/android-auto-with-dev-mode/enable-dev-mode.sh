@@ -26,8 +26,13 @@ command -v python3 >/dev/null || { echo "python3 not found" >&2; exit 1; }
 if [[ "$TARGET" == emulator-* ]]; then
   SERIAL="$TARGET"
 else
-  SERIAL="$(dorker ps | awk -v n="$TARGET" '$2 == n { print $5 }')"
-  [ -n "$SERIAL" ] && [ "$SERIAL" != "-" ] || {
+  SERIAL="$(dorker ps --json | python3 -I -c '
+import json, sys
+for i in json.load(sys.stdin):
+    if i["name"] == sys.argv[1] and i["status"] == "READY":
+        print(i["serial"])
+' "$TARGET")"
+  [ -n "$SERIAL" ] || {
     echo "no running dorker instance named '$TARGET' (see: dorker ps)" >&2
     exit 1
   }

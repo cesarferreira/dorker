@@ -87,12 +87,20 @@ It:
 1. sets `FROM android:37-playstore` (without `--api` it keeps the Dorkerfile's `FROM`);
 2. downloads the latest Android Auto with apkeep and reads its version, say 18.1.x;
 3. stops there if `gearhead:37-aa18.1` already has this machine's architecture (`--force`
-   rebuilds it);
-4. builds the image, then checks it: the head unit server listens on port 5277, and the
-   installed Android Auto is the downloaded version. It does not push an image that fails;
-5. pushes `gearhead:37-aa18.1`, and moves `gearhead:37` to it when no newer Android Auto
+   redoes it);
+4. **updates the previous version**, the way a car or phone gets Android Auto from the Play
+   Store: it runs the newest older image for this architecture (say `gearhead:37-aa18.0`),
+   installs the new Android Auto over it (app data and developer mode are kept), starts the
+   head unit server and saves the result with `dorker commit`. With `--fresh`, or when there
+   is no older version yet, it builds the Dorkerfile from scratch instead (a clean install);
+5. checks the result: the head unit server listens on port 5277, and the installed Android
+   Auto is the downloaded version. It does not push an image that fails;
+6. pushes `gearhead:37-aa18.1`, and moves `gearhead:37` to it when no newer Android Auto
    version is published (so a machine that downloaded an older version cannot move it back);
-6. prints which architectures each tag has, and says when the other machine still has to run.
+7. prints which architectures each tag has, and says when the other machine still has to run.
+
+Each version is then the previous one plus an update, on both machines, so `:37-aa18.1` on a
+Mac and on Linux have the same history.
 
 Then everyone runs `dorker run -d --name aa ghcr.io/your-org/gearhead:37-aa18.1` (or `:37`
 for the newest). See [Share images with your team](../../README.md#share-images-with-your-team).
