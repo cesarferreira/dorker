@@ -82,6 +82,18 @@ gh auth refresh -s write:packages   # once, for ghcr.io
 ./publish.sh ghcr.io/your-org/gearhead --api 37
 ```
 
+Or with the `Makefile`, after setting the repository once in your shell profile:
+
+```bash
+export DORKER_PUBLISH_REPO=ghcr.io/your-org/gearhead
+make publish         # update the previous version to the latest Android Auto and push it
+make publish-fresh   # the same, built from scratch (a clean install)
+make republish       # redo this machine's push of the latest version
+make run             # run the newest published image (REPO:37)
+```
+
+`make publish REPO=... API=36` overrides both for one run.
+
 It:
 
 1. sets `FROM android:37-playstore` (without `--api` it keeps the Dorkerfile's `FROM`);
