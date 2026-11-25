@@ -71,5 +71,28 @@ Notes:
 - The `.xapk` is not committed (Google's app, version changes). Check that your use of it
   complies with its terms.
 
-To give your team this exact image on Mac and Linux, see
-[Share images with your team](../../README.md#share-images-with-your-team).
+## Publish it for your team
+
+`publish.sh` builds this folder with the latest Android Auto and pushes it to a registry.
+Run the same command on an Apple Silicon Mac and on an x86_64 Linux box, at the same time
+if you like; each adds its own CPU architecture to the tags:
+
+```bash
+gh auth refresh -s write:packages   # once, for ghcr.io
+./publish.sh ghcr.io/your-org/gearhead --api 37
+```
+
+It:
+
+1. sets `FROM android:37-playstore` (without `--api` it keeps the Dorkerfile's `FROM`);
+2. downloads the latest Android Auto with apkeep and reads its version, say 18.1.x;
+3. stops there if `gearhead:37-aa18.1` already has this machine's architecture (`--force`
+   rebuilds it);
+4. builds the image, then checks it: the head unit server listens on port 5277, and the
+   installed Android Auto is the downloaded version. It does not push an image that fails;
+5. pushes `gearhead:37-aa18.1`, and moves `gearhead:37` to it when no newer Android Auto
+   version is published (so a machine that downloaded an older version cannot move it back);
+6. prints which architectures each tag has, and says when the other machine still has to run.
+
+Then everyone runs `dorker run -d --name aa ghcr.io/your-org/gearhead:37-aa18.1` (or `:37`
+for the newest). See [Share images with your team](../../README.md#share-images-with-your-team).

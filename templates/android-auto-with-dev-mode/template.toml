@@ -1,3 +1,4 @@
 description = "Android Auto with developer mode and the head unit server already on"
 next = "cargo install apkeep           # once"
 next = "dorker run -d --name auto      # downloads the .xapk, builds (~1.5 min), runs"
+next = "./publish.sh ghcr.io/your-org/gearhead --api 37   # optional: share it with your team"
