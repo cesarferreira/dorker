@@ -71,5 +71,48 @@ Notes:
 - The `.xapk` is not committed (Google's app, version changes). Check that your use of it
   complies with its terms.
 
-To give your team this exact image on Mac and Linux, see
-[Share images with your team](../../README.md#share-images-with-your-team).
+## Publish it for your team
+
+`publish.sh` builds this folder with the latest Android Auto and pushes it to a registry.
+Run the same command on an Apple Silicon Mac and on an x86_64 Linux box, at the same time
+if you like; each adds its own CPU architecture to the tags:
+
+```bash
+gh auth refresh -s write:packages   # once, for ghcr.io
+./publish.sh ghcr.io/your-org/gearhead --api 37
+```
+
+Or with the `Makefile`, after setting the repository once in your shell profile:
+
+```bash
+export DORKER_PUBLISH_REPO=ghcr.io/your-org/gearhead
+make publish         # update the previous version to the latest Android Auto and push it
+make publish-fresh   # the same, built from scratch (a clean install)
+make republish       # redo this machine's push of the latest version
+make run             # run the newest published image (REPO:37)
+```
+
+`make publish REPO=... API=36` overrides both for one run.
+
+It:
+
+1. sets `FROM android:37-playstore` (without `--api` it keeps the Dorkerfile's `FROM`);
+2. downloads the latest Android Auto with apkeep and reads its version, say 18.1.x;
+3. stops there if `gearhead:37-aa18.1` already has this machine's architecture (`--force`
+   redoes it);
+4. **updates the previous version**, the way a car or phone gets Android Auto from the Play
+   Store: it runs the newest older image for this architecture (say `gearhead:37-aa18.0`),
+   installs the new Android Auto over it (app data and developer mode are kept), starts the
+   head unit server and saves the result with `dorker commit`. With `--fresh`, or when there
+   is no older version yet, it builds the Dorkerfile from scratch instead (a clean install);
+5. checks the result: the head unit server listens on port 5277, and the installed Android
+   Auto is the downloaded version. It does not push an image that fails;
+6. pushes `gearhead:37-aa18.1`, and moves `gearhead:37` to it when no newer Android Auto
+   version is published (so a machine that downloaded an older version cannot move it back);
+7. prints which architectures each tag has, and says when the other machine still has to run.
+
+Each version is then the previous one plus an update, on both machines, so `:37-aa18.1` on a
+Mac and on Linux have the same history.
+
+Then everyone runs `dorker run -d --name aa ghcr.io/your-org/gearhead:37-aa18.1` (or `:37`
+for the newest). See [Share images with your team](../../README.md#share-images-with-your-team).

@@ -360,8 +360,13 @@ newer push of a moving tag. A snapshot restores only on the emulator version tha
 on another version the image cold boots (about a minute) with the same data, and `pull`
 says so.
 
-When Android Auto 18.1 ships, delete the `.xapk`, repeat steps 2 and 3 with
-`:37-aa18.1` (and `:37`), and keep `:37-aa18.0` for comparison. Credentials can also come
+Steps 2 and 3 are also one script that the template ships: run
+`./publish.sh ghcr.io/your-org/gearhead --api 37` on the Mac and on the Linux box (in
+parallel is fine). It downloads the latest Android Auto, installs it as an update over the
+previous published version (like a car getting it from the Play Store; `--fresh` builds from
+scratch), checks the image, pushes `:37-aa<version>`, and moves `:37` when that is the newest
+version. Run it again when a new
+Android Auto ships; `:37-aa18.0` stays available for comparison. Credentials can also come
 from `docker login` or `DORKER_REGISTRY_TOKEN`; a complete example lives in
 [examples/shared-image](examples/shared-image), details in
 [docs/workflows/sharing.md](docs/workflows/sharing.md).
