@@ -11,7 +11,7 @@ Day-to-day commands. Flags for a command are in `dorker <command> --help`. Most 
 | `dorker pull android:35` | Install a system image. With no argument, install the `FROM` image of `./Dorkerfile` |
 | `dorker build -t myapp:latest .` | Build an image from a Dorkerfile |
 | `dorker images` | List built images |
-| `dorker rmi <image>` | Remove an image |
+| `dorker rmi <image>` | Remove a tag. When it is the image's last tag, or you name the image id, remove the image |
 | `dorker ls` | Images, instances, and storage. Alias: `dorker df` |
 | `dorker prune` | Remove images you no longer need |
 
