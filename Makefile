@@ -1,4 +1,4 @@
-.PHONY: all build build-release install install-release clean test check fmt lint run demo release
+.PHONY: all build build-release install install-release clean test check fmt lint run demo release publish-aa publish-aa-fresh
 
 LEVEL ?= minor
 
@@ -59,3 +59,22 @@ demo: install
 # Bump version, regenerate CHANGELOG.md, tag, publish, and push (requires cargo-release + git-cliff)
 release:
 	cargo release $(LEVEL) --execute --no-confirm
+
+# Publish the Android Auto image (templates/android-auto-with-dev-mode) with the latest
+# Android Auto, for this machine's CPU. Run the same command on an Apple Silicon Mac and on
+# x86_64 Linux. It installs dorker from this checkout, copies the template into .publish/
+# (ignored by git) and runs its publish.sh there, so the checkout stays clean.
+#   make publish-aa         update the previous version, like a Play Store update
+#   make publish-aa-fresh   build from scratch (a clean install)
+# Override the target with AA_REPO=ghcr.io/org/name (or DORKER_PUBLISH_REPO) and AA_API=36.
+AA_REPO ?= $(or $(DORKER_PUBLISH_REPO),ghcr.io/cesarferreira/gearhead)
+AA_API ?= 37
+AA_DIR := .publish/android-auto
+
+publish-aa: install-release
+	dorker init --template android-auto-with-dev-mode $(AA_DIR) --force
+	$(MAKE) -C $(AA_DIR) publish REPO=$(AA_REPO) API=$(AA_API)
+
+publish-aa-fresh: install-release
+	dorker init --template android-auto-with-dev-mode $(AA_DIR) --force
+	$(MAKE) -C $(AA_DIR) publish-fresh REPO=$(AA_REPO) API=$(AA_API)
