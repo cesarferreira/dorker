@@ -1,5 +1,6 @@
 /target
 /site
+/.publish
 Cargo.lock
 .DS_Store
 *.log
