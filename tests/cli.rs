@@ -661,6 +661,41 @@ fn templates_list_show_and_init() {
 }
 
 #[test]
+fn android_auto_fetch_acknowledges_apkpure_automatically() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let e = Env::new("android-auto-fetch");
+    let apkeep = write(
+        &e.home,
+        "apkeep",
+        r#"#!/usr/bin/env bash
+if [ "$*" != "-a com.google.android.projection.gearhead -d apk-pure -o acknowledge_dangers=true ." ]; then
+    echo "The dangers of using this download source must be explicitly acknowledged" >&2
+    exit 1
+fi
+touch com.google.android.projection.gearhead.xapk
+"#,
+    );
+    std::fs::set_permissions(apkeep, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(e.home.clone())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+
+    for template in ["android-auto", "android-auto-with-dev-mode"] {
+        let dir = e.home.join(template);
+        let init = e.run(&["init", "--template", template, dir.to_str().unwrap()]);
+        assert_eq!(code(&init), 0, "{}", text(&init.stderr));
+        let fetched = Command::new(dir.join("fetch.sh"))
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        assert_eq!(code(&fetched), 0, "{template}: {}", text(&fetched.stderr));
+    }
+}
+
+#[test]
 fn config_file_sets_where_things_live_and_the_environment_wins() {
     let e = Env::new("config");
     let cfg = e.home.join("test-config.toml");

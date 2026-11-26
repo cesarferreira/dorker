@@ -8,5 +8,6 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 command -v apkeep >/dev/null || { echo "apkeep not found: cargo install apkeep" >&2; exit 1; }
-apkeep -a com.google.android.projection.gearhead -d apk-pure .
+# apkeep 1.1.0 requires explicit acknowledgment for APKPure downloads.
+apkeep -a com.google.android.projection.gearhead -d apk-pure -o acknowledge_dangers=true .
 ls -l com.google.android.projection.gearhead.xapk
